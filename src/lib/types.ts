@@ -141,7 +141,7 @@ export type RecipeIngredient = {
 export type RecipeCosting = {
   id: string;
   name: string;
-  drinks: string[];
+  menuItems: string[];
   ingredients: RecipeIngredient[];
   hotCupInventoryItemId?: string;
   icedCupInventoryItemId?: string;

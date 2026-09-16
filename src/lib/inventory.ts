@@ -255,7 +255,7 @@ export function ingredientsForOrderLine(
     return drink === line.productId || normalizedNames.has(normalizedDrink);
   };
   const recipeCostings = store.recipeCostings ?? [];
-  const costing = [...recipeCostings].reverse().find((entry) => entry.drinks.some(matchesDrink));
+  const costing = [...recipeCostings].reverse().find((entry) => entry.menuItems.some(matchesDrink));
 
   // When costings exist, they are the only source of truth. Never fall back to a stale recipe.
   const recipe = recipeCostings.length > 0

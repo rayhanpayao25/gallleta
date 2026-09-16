@@ -384,7 +384,15 @@ export function SalePurchaseTransactions({
   const [stockNotice, setStockNotice] = useState<string | null>(null);
   const recipeMenu = store.menu ?? [];
   const recipeMap = store.recipes ?? {};
-  type Costing = { id?: string; name: string; drinks: string[]; ingredients: RecipeIngredient[]; hotCupInventoryItemId?: string; icedCupInventoryItemId?: string; otherCupInventoryItemId?: string };
+  type Costing = {
+    id?: string;
+    name: string;
+    menuItems: string[];
+    ingredients: RecipeIngredient[];
+    hotCupInventoryItemId?: string;
+    icedCupInventoryItemId?: string;
+    otherCupInventoryItemId?: string;
+  };
   const [recipeCostings, setRecipeCostings] = useState<Costing[]>([]);
   const [editingCostingIndex, setEditingCostingIndex] = useState<number | null>(null);
   const [savingRecipes, setSavingRecipes] = useState(false);
@@ -397,9 +405,14 @@ export function SalePurchaseTransactions({
 
   useEffect(() => {
     if (hasHydratedCostings.current) return;
+
     hasHydratedCostings.current = true;
+
     const saved = store.recipeCostings;
-    if (saved && saved.length > 0) setRecipeCostings(saved);
+
+    if (saved && saved.length > 0) {
+      setRecipeCostings(saved);
+    }
   }, [store.recipeCostings]);
 
   function updateCosting(index: number, patch: Partial<Costing>) {
@@ -413,65 +426,86 @@ export function SalePurchaseTransactions({
     } : row));
   }
 
-  function toggleCostingDrink(index: number, drink: string) {
+  function toggleCostingMenuItem(index: number, drink: string) {
     setRecipeCostings((rows) => rows.map((row, rowIndex) => {
       if (rowIndex === index) {
-        const drinks = row.drinks.includes(drink) ? row.drinks.filter((name) => name !== drink) : [...row.drinks, drink];
-        return { ...row, drinks };
+        const menuItems = row.menuItems.includes(drink)
+          ? row.menuItems.filter((name) => name !== drink)
+          : [...row.menuItems, drink];
+        return { ...row, menuItems };
       }
-      // A drink may belong to exactly one costing. Remove stale duplicate assignments.
-      return { ...row, drinks: row.drinks.filter((name) => name.trim().toLowerCase() !== drink.trim().toLowerCase()) };
+      // A menu item may belong to exactly one costing. Remove stale duplicate assignments.
+      return { ...row, menuItems: row.menuItems.filter((name) => name.trim().toLowerCase() !== drink.trim().toLowerCase()) };
     }));
   }
 
-  const menuDrinks = useMemo(
-    () => recipeMenu.filter((drink) => {
-      const normalizedCategory = drink.category.replace(/[^a-z]/gi, "").toLowerCase();
-      return !isFoodOrPastry(drink.category) && normalizedCategory !== "addons" && normalizedCategory !== "addson";
-    }),
+  // const menuDrinks = useMemo(
+  //   () => recipeMenu.filter((drink) => {
+  //     const normalizedCategory = drink.category.replace(/[^a-z]/gi, "").toLowerCase();
+  //     return !isFoodOrPastry(drink.category) && normalizedCategory !== "addons" && normalizedCategory !== "addson";
+  //   }),
+  //   [recipeMenu],
+  // );
+  const menuItems = useMemo(
+    () =>
+      recipeMenu.filter((item) => {
+        const normalizedCategory = item.category
+          .replace(/[^a-z]/gi, "")
+          .toLowerCase();
+
+        return (
+          normalizedCategory !== "addons" &&
+          normalizedCategory !== "addson"
+        );
+      }),
     [recipeMenu],
   );
-  const assignedDrinkNames = useMemo(
-    () => new Set(recipeCostings.flatMap((costing) => costing.drinks.map((name) => name.trim().toLowerCase()))),
+  const assignedMenuItems = useMemo(
+    () => new Set(recipeCostings.flatMap((costing) => costing.menuItems.map((name) => name.trim().toLowerCase()))),
     [recipeCostings],
   );
-  const drinkCategories = useMemo(
-    () => Array.from(new Set(menuDrinks.map((drink) => drink.category?.trim()).filter(Boolean))).sort(),
-    [menuDrinks],
+  const menuCategories = useMemo(
+    () => Array.from(new Set(menuItems.map((item) => item.category?.trim()).filter(Boolean))).sort(),
+    [menuItems],
   );
-  const unassignedMenuDrinks = useMemo(
-    () => menuDrinks.filter((drink) => !assignedDrinkNames.has(drink.name.trim().toLowerCase())),
-    [assignedDrinkNames, menuDrinks],
+  const unassignedMenuItems = useMemo(
+    () => menuItems.filter((item) => !assignedMenuItems.has(item.name.trim().toLowerCase())),
+    [assignedMenuItems, menuItems],
   );
-  const filteredUnassignedMenuDrinks = useMemo(() => {
+  const filteredUnassignedMenuItems = useMemo(() => {
     const query = drinkSearch.trim().toLowerCase();
-    return unassignedMenuDrinks.filter((drink) => {
-      const matchesSearch = !query || drink.name.toLowerCase().includes(query);
-      const matchesCategory = selectedDrinkCategories.length === 0 || selectedDrinkCategories.includes(drink.category);
+    return unassignedMenuItems.filter((item) => {
+      const matchesSearch = !query || item.name.toLowerCase().includes(query);
+      const matchesCategory = selectedDrinkCategories.length === 0 || selectedDrinkCategories.includes(item.category);
       return matchesSearch && matchesCategory;
     });
-  }, [drinkSearch, selectedDrinkCategories, unassignedMenuDrinks]);
+  }, [drinkSearch, selectedDrinkCategories, unassignedMenuItems]);
 
-  function addDrinkToCosting(index: number, drink: string) {
+  const cupInventoryItems = useMemo(
+    () => store.inventory.filter((item) => item.name.trim().toLowerCase().includes("cup")),
+    [store.inventory],
+  );
+
+  function addMenuItemToCosting(index: number, drink: string) {
     const name = drink.trim();
     if (!name) return;
     setRecipeCostings((rows) =>
       rows.map((row, rowIndex) => {
         if (rowIndex === index) {
-          if (row.drinks.some((entry) => entry.trim().toLowerCase() === name.toLowerCase())) return row;
-          return { ...row, drinks: [...row.drinks, name] };
+          if (row.menuItems.some((entry) => entry.trim().toLowerCase() === name.toLowerCase())) return row;
+          return { ...row, menuItems: [...row.menuItems, name] };
         }
-        return { ...row, drinks: row.drinks.filter((entry) => entry.trim().toLowerCase() !== name.toLowerCase()) };
+        return { ...row, menuItems: row.menuItems.filter((entry) => entry.trim().toLowerCase() !== name.toLowerCase()) };
       }),
     );
   }
 
-  function addOtherDrink(index: number) {
+  function addOtherMenuItem(index: number) {
     const drink = otherDrinkName.trim();
     if (!drink) return;
-    const alreadyAssigned = recipeCostings.some((costing, costingIndex) => costingIndex !== index && costing.drinks.some((name) => name.toLowerCase() === drink.toLowerCase()));
+    const alreadyAssigned = recipeCostings.some((costing, costingIndex) => costingIndex !== index && costing.menuItems.some((name) => name.toLowerCase() === drink.toLowerCase()));
     if (alreadyAssigned) return;
-    setRecipeCostings((rows) => rows.map((row, rowIndex) => rowIndex === index && !row.drinks.some((name) => name.toLowerCase() === drink.toLowerCase()) ? { ...row, drinks: [...row.drinks, drink] } : row));
+    setRecipeCostings((rows) => rows.map((row, rowIndex) => rowIndex === index && !row.menuItems.some((name) => name.toLowerCase() === drink.toLowerCase()) ? { ...row, menuItems: [...row.menuItems, drink] } : row));
     setOtherDrinkName("");
     setShowOtherDrink(false);
   }
@@ -482,17 +516,17 @@ export function SalePurchaseTransactions({
     setOtherDrinkName("");
   }
 
-  function attachUnassignedDrink(drink: string) {
+  function attachUnassignedMenuItem(drink: string) {
     if (editingCostingIndex !== null) {
-      addDrinkToCosting(editingCostingIndex, drink);
+      addMenuItemToCosting(editingCostingIndex, drink);
       return;
     }
     if (recipeCostings.length > 0) {
       setEditingCostingIndex(0);
-      addDrinkToCosting(0, drink);
+      addMenuItemToCosting(0, drink);
       return;
     }
-    setRecipeCostings([{ name: "", drinks: [drink], ingredients: [{ inventoryItemId: "", name: "", amount: 0, unit: "ml" }] }]);
+    setRecipeCostings([{ name: "", menuItems: [drink], ingredients: [{ inventoryItemId: "", name: "", amount: 0, unit: "ml" }] }]);
     setEditingCostingIndex(0);
   }
 
@@ -507,40 +541,83 @@ export function SalePurchaseTransactions({
 
   async function saveCostings(nextCostings = recipeCostings) {
     const recipes: StoreData["recipes"] = {};
-    nextCostings.forEach((costing) => costing.drinks.forEach((drink) => {
-      const ingredients = costing.ingredients.filter((ingredient) => ingredient.name.trim() && Number(ingredient.amount) > 0);
-      recipes[drink] = ingredients;
-      const menuItem = recipeMenu.find((item) => item.name.trim().toLowerCase() === drink.trim().toLowerCase() || item.name.trim().toLowerCase().replace(/s$/, "") === drink.trim().toLowerCase().replace(/s$/, ""));
-      if (menuItem) recipes[menuItem.id] = ingredients;
+
+    nextCostings.forEach((costing) =>
+      costing.menuItems.forEach((menuItemName) => {
+        const ingredients = costing.ingredients.filter(
+          (ingredient) =>
+            ingredient.name.trim() &&
+            Number(ingredient.amount) > 0
+        );
+
+        recipes[menuItemName] = ingredients;
+
+        const menuItem = recipeMenu.find(
+          (item) =>
+            item.name.trim().toLowerCase() ===
+              menuItemName.trim().toLowerCase() ||
+            item.name.trim().toLowerCase().replace(/s$/, "") ===
+              menuItemName.trim().toLowerCase().replace(/s$/, "")
+        );
+
+        if (menuItem) {
+          recipes[menuItem.id] = ingredients;
+        }
+      })
+    );
+
+    const savedCostings = nextCostings.map((costing, index) => ({
+      ...costing,
+      id: costing.id || `recipe-costing-${Date.now()}-${index}`,
     }));
-  const savedCostings = nextCostings.map((costing, index) => ({ ...costing, id: costing.id || `recipe-costing-${Date.now()}-${index}` }));
-  const configuredIngredients = savedCostings.flatMap((costing) => costing.ingredients).filter((ingredient) => ingredient.name.trim());
-  const nextStocks = [...stocks];
-  for (const ingredient of configuredIngredients) {
-    const existingIndex = nextStocks.findIndex((item) => namesMatch(item.name, ingredient.name));
-    const amountPerCup = Number(ingredient.amount);
-    const unit = ingredient.unit?.trim() || "pcs";
-    if (existingIndex >= 0) {
-      nextStocks[existingIndex] = {
-        ...nextStocks[existingIndex],
-        unit,
-        cupUsageAmount: Number.isFinite(amountPerCup) && amountPerCup > 0 ? amountPerCup : nextStocks[existingIndex].cupUsageAmount,
-      };
-    } else {
-      nextStocks.push({
-        id: `stock-${Date.now()}-${nextStocks.length}`,
-        name: ingredient.name.trim(),
-        category: "",
-        stock: 0,
-        unit,
-        cupUsageAmount: Number.isFinite(amountPerCup) && amountPerCup > 0 ? amountPerCup : undefined,
-      });
+
+    const configuredIngredients = savedCostings
+      .flatMap((costing) => costing.ingredients)
+      .filter((ingredient) => ingredient.name.trim());
+
+    const nextStocks = [...stocks];
+
+    for (const ingredient of configuredIngredients) {
+      const existingIndex = nextStocks.findIndex((item) =>
+        namesMatch(item.name, ingredient.name)
+      );
+
+      const amountPerCup = Number(ingredient.amount);
+      const unit = ingredient.unit?.trim() || "pcs";
+
+      if (existingIndex >= 0) {
+        nextStocks[existingIndex] = {
+          ...nextStocks[existingIndex],
+          unit,
+          cupUsageAmount:
+            Number.isFinite(amountPerCup) && amountPerCup > 0
+              ? amountPerCup
+              : nextStocks[existingIndex].cupUsageAmount,
+        };
+      } else {
+        nextStocks.push({
+          id: `stock-${Date.now()}-${nextStocks.length}`,
+          name: ingredient.name.trim(),
+          category: "",
+          stock: 0,
+          unit,
+          cupUsageAmount:
+            Number.isFinite(amountPerCup) && amountPerCup > 0
+              ? amountPerCup
+              : undefined,
+        });
+      }
     }
-  }
-  setStocks(nextStocks);
-  setRecipeCostings(savedCostings);
-  await persistInventory(nextStocks);
-  await saveAdminData({ recipes, recipeCostings: savedCostings });
+
+    setStocks(nextStocks);
+    setRecipeCostings(savedCostings);
+
+    await persistInventory(nextStocks);
+
+    await saveAdminData({
+      recipes,
+      recipeCostings: savedCostings,
+    });
   }
 
   const [filterKeyword, setFilterKeyword] = useState("");
@@ -1108,7 +1185,7 @@ export function SalePurchaseTransactions({
                   const nextIndex = recipeCostings.length;
                   setRecipeCostings((rows) => [
                     ...rows,
-                    { name: "", drinks: [], ingredients: [{ inventoryItemId: "", name: "", amount: 0, unit: "ml" }] },
+                    { name: "", menuItems: [], ingredients: [{ inventoryItemId: "", name: "", amount: 0, unit: "ml" }] },
                   ]);
                   openCosting(nextIndex);
                 }}
@@ -1127,18 +1204,18 @@ export function SalePurchaseTransactions({
             </div>
           </div>
 
-          {unassignedMenuDrinks.length > 0 && editingCostingIndex === null ? (
+          {unassignedMenuItems.length > 0 && editingCostingIndex === null ? (
             <div className="rounded-lg border border-neutral-300 bg-neutral-50 px-4 py-3">
               <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-500">Needs a recipe</p>
               <div className="mt-2 flex flex-wrap gap-1.5">
-                {unassignedMenuDrinks.map((drink) => (
+                {unassignedMenuItems.map((item) => (
                   <button
-                    key={drink.id}
+                    key={item.id}
                     type="button"
-                    onClick={() => attachUnassignedDrink(drink.name)}
+                    onClick={() => attachUnassignedMenuItem(item.name)}
                     className="rounded-full border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 hover:border-neutral-900"
                   >
-                    {drink.name}
+                    {item.name}
                   </button>
                 ))}
               </div>
@@ -1186,7 +1263,7 @@ export function SalePurchaseTransactions({
                   <div className="grid border-t border-neutral-200 lg:grid-cols-[minmax(16rem,20rem)_minmax(0,1fr)]">
                     <div className="border-b border-neutral-200 p-4 lg:border-b-0 lg:border-r">
                       <div className="flex items-center justify-between gap-2">
-                        <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-500">Drinks</p>
+                        <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-500">Menu Items</p>
                         <button
                           type="button"
                           onClick={() => setShowDrinkSearch((visible) => !visible)}
@@ -1199,46 +1276,46 @@ export function SalePurchaseTransactions({
                         <input
                           value={drinkSearch}
                           onChange={(event) => setDrinkSearch(event.target.value)}
-                          placeholder="Search drinks"
-                          aria-label="Search drinks"
+                          placeholder="Search menu items"
+                          aria-label="Search menu items"
                           className="mt-2 w-full rounded border border-neutral-300 px-2 py-1.5 text-sm"
                         />
                       ) : null}
-                      {drinkCategories.length > 0 ? (
+                      {menuCategories.length > 0 ? (
                         <label className="mt-3 block">
                           <span className="text-[11px] font-bold uppercase tracking-wide text-neutral-500">Category</span>
                           <select
                             value={selectedDrinkCategories[0] ?? ""}
                             onChange={(event) => setSelectedDrinkCategories(event.target.value ? [event.target.value] : [])}
-                            aria-label="Filter drinks by category"
+                            aria-label="Filter Items by category"
                             className="mt-2 w-full rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm text-neutral-700"
                           >
                             <option value="">All categories</option>
-                            {drinkCategories.map((category) => (
+                            {menuCategories.map((category) => (
                               <option key={category} value={category}>{category}</option>
                             ))}
                           </select>
                         </label>
                       ) : null}
                       <div className="mt-4 border-t border-neutral-100 pt-3">
-                        {filteredUnassignedMenuDrinks.length > 0 || menuDrinks.some((drink) => costing.drinks.includes(drink.name)) ? (
+                        {filteredUnassignedMenuItems.length > 0 || menuItems.some((item) => costing.menuItems.includes(item.name)) ? (
                           <div className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
-                            {menuDrinks
-                              .filter((drink) => {
+                            {menuItems
+                              .filter((item) => {
                                 const query = drinkSearch.trim().toLowerCase();
-                                const matchesSearch = !query || drink.name.toLowerCase().includes(query);
-                                const matchesCategory = selectedDrinkCategories.length === 0 || selectedDrinkCategories.includes(drink.category);
+                                const matchesSearch = !query || item.name.toLowerCase().includes(query);
+                                const matchesCategory = selectedDrinkCategories.length === 0 || selectedDrinkCategories.includes(item.category);
                                 return matchesSearch && matchesCategory;
                               })
-                              .map((drink) => {
-                                const drinkKey = drink.name.trim().toLowerCase();
-                                const isChecked = costing.drinks.some((name) => name.trim().toLowerCase() === drinkKey);
+                              .map((item) => {
+                                const itemKey = item.name.trim().toLowerCase();
+                                const isChecked = costing.menuItems.some((name) => name.trim().toLowerCase() === itemKey);
                                 const isAssignedToAnotherCosting = recipeCostings.some(
-                                  (otherCosting, otherIndex) => otherIndex !== costingIndex && otherCosting.drinks.some((name) => name.trim().toLowerCase() === drinkKey),
+                                  (otherCosting, otherIndex) => otherIndex !== costingIndex && otherCosting.menuItems.some((name) => name.trim().toLowerCase() === itemKey),
                                 );
                                 return (
                                   <label
-                                    key={drink.id}
+                                    key={item.id}
                                     title={isAssignedToAnotherCosting ? "Already assigned to another costing" : undefined}
                                     className={`flex min-w-0 items-center gap-2 text-sm ${isChecked ? "text-neutral-900" : isAssignedToAnotherCosting ? "cursor-not-allowed text-neutral-300" : "text-neutral-400"}`}
                                   >
@@ -1246,16 +1323,16 @@ export function SalePurchaseTransactions({
                                       type="checkbox"
                                       checked={isChecked}
                                       disabled={isAssignedToAnotherCosting}
-                                      onChange={() => toggleCostingDrink(costingIndex, drink.name)}
+                                      onChange={() => toggleCostingMenuItem(costingIndex, item.name)}
                                       className="h-4 w-4 shrink-0 accent-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
                                     />
-                                    <span className="truncate">{drink.name}</span>
+                                    <span className="truncate">{item.name}</span>
                                   </label>
                                 );
                               })}
                           </div>
                         ) : (
-                          <p className="text-sm text-neutral-500">No drinks match your filters.</p>
+                          <p className="text-sm text-neutral-500">No items match your filters.</p>
                         )}
                       </div>
                       {showOtherDrink ? (
@@ -1266,7 +1343,7 @@ export function SalePurchaseTransactions({
                             onKeyDown={(event) => {
                               if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
                                 event.preventDefault();
-                                addOtherDrink(costingIndex);
+                                addOtherMenuItem(costingIndex);
                               }
                             }}
                             placeholder="Drink name"
@@ -1274,7 +1351,7 @@ export function SalePurchaseTransactions({
                           />
                           <button
                             type="button"
-                            onClick={() => addOtherDrink(costingIndex)}
+                            onClick={() => addOtherMenuItem(costingIndex)}
                             className="rounded border border-neutral-400 px-3 py-1.5 text-sm font-medium text-neutral-700"
                           >
                             Add
@@ -1292,8 +1369,9 @@ export function SalePurchaseTransactions({
                     </div>
 
                     <div className="p-4">
-                      <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-500">Ingredients for 1 cup</p>
+                      <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-500">Ingredients: </p>
                       <div className="mt-3 grid gap-2 sm:grid-cols-2">
+
                         {(["hotCupInventoryItemId", "icedCupInventoryItemId", "otherCupInventoryItemId"] as const).map((field) => (
                           <label key={field} className="text-xs text-neutral-600">
                             {field === "hotCupInventoryItemId" ? "Hot cup" : field === "icedCupInventoryItemId" ? "Iced cup" : "Other cup"}
@@ -1303,7 +1381,7 @@ export function SalePurchaseTransactions({
                               className="mt-1 w-full rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm text-neutral-800"
                             >
                               <option value="">Select cup item</option>
-                              {store.inventory.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                              {cupInventoryItems.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                             </select>
                           </label>
                         ))}
@@ -1864,7 +1942,7 @@ export function SalePurchaseTransactions({
                                   {group.items.length === 0 ? (
                                     <tr>
                                       <td colSpan={4} className="px-3 py-3 pl-10 text-neutral-500">
-                                        No recipe assigned for these drinks, so no stock was deducted.
+                                        No recipe assigned for these items, so no stock was deducted.
                                       </td>
                                     </tr>
                                   ) : (

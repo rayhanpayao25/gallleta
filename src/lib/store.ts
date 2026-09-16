@@ -33,7 +33,7 @@ function env(...names: string[]) {
 }
 
 export function supabaseAdmin() {
-  const url = env(
+  const url = env( 
     "SUPABASE_URL",
     "NEXT_PUBLIC_SUPABASE_URL",
     "commume_coffee_SUPABASE_URL",
@@ -312,7 +312,7 @@ function normalizeStore(store: StoreData): StoreData {
     store.recipeCostings = [];
   } else {
     store.recipeCostings = store.recipeCostings
-      .filter((costing) => costing && typeof costing.name === "string" && Array.isArray(costing.drinks) && Array.isArray(costing.ingredients))
+      .filter((costing) => costing && typeof costing.name === "string" && Array.isArray(costing.menuItems) && Array.isArray(costing.ingredients))
       .map((costing, index) => ({
         ...costing,
         id: typeof costing.id === "string" && costing.id ? costing.id : `recipe-costing-${index}`,
