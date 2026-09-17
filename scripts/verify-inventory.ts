@@ -11,7 +11,6 @@ function getEnv(name: string): string {
 type InventoryRow = {
   id: string;
   name: string;
-  category: string | null;
   unit: string | null;
   cost: number | string | null;
   stock: number | string | null;
@@ -32,7 +31,7 @@ async function verifyInventory() {
 
   const { data, error } = await supabase
     .from("inventory_items")
-    .select("id, name, category, unit, cost, stock, max_stock")
+    .select("id, name, unit, cost, stock, max_stock")
     .order("created_at", { ascending: true });
 
   if (error) {

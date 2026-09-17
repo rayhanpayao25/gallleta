@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { deleteAdminRecord, saveAdminData } from "@/actions/pos";
+import { createRestock, deleteAdminRecord, deleteRestock, editRestock, saveAdminData } from "@/actions/pos";
 import { costingIngredientForItem, cupsFromQuantity, formatQty, ingredientsForOrderLine, namesMatch, perCupAmount, remainingForUsages, roundQty, stockLedgerForRange } from "@/lib/inventory";
 import { phDateString, phDateTimeLabel, phIsoFromDate, phNowDateTime, phPeriodBounds, type PeriodRange } from "@/lib/datetime";
 import { isFoodOrPastry, orderSoldAsLabel, orderSoldAsLines } from "@/lib/menu";
@@ -187,7 +187,6 @@ function transactionToOrder(transaction: Transaction, existing?: Order): Order {
 type StockItem = {
   id: string;
   name: string;
-  category: string;
   stock: number;
   openingStock?: number;
   unit: string;
@@ -277,7 +276,6 @@ export function SalePurchaseTransactions({
   const persistedStocks: StockItem[] = store.inventory.map((item) => ({
     id: item.id,
     name: item.name,
-    category: item.category,
     stock: item.stock,
     openingStock: item.openingStock ?? (item.purchaseUnitSize ? 10 * item.purchaseUnitSize : item.stock),
     unit: item.unit || "pcs",
@@ -598,7 +596,6 @@ export function SalePurchaseTransactions({
         nextStocks.push({
           id: `stock-${Date.now()}-${nextStocks.length}`,
           name: ingredient.name.trim(),
-          category: "",
           stock: 0,
           unit,
           cupUsageAmount:
@@ -770,7 +767,6 @@ export function SalePurchaseTransactions({
       return {
         id: item.id,
         name: item.name,
-        category: item.category || existing?.category || "",
   stock: item.stock,
   openingStock: item.openingStock ?? existing?.openingStock,
   unit: item.unit || existing?.unit || "pcs",
@@ -830,7 +826,6 @@ export function SalePurchaseTransactions({
       const newItem: StockItem = {
         id: `stock-${Date.now()}`,
         name: stockName.trim(),
-        category: "",
         stock: toBaseQuantity({ purchaseUnitSize }, pieces),
         openingStock: toBaseQuantity({ purchaseUnitSize }, pieces),
         unit,
@@ -869,7 +864,7 @@ export function SalePurchaseTransactions({
     const name = window.prompt("Item name");
     if (!name?.trim()) return;
     if (stocks.some((item) => item.name.trim().toLowerCase() === name.trim().toLowerCase())) return;
-    const nextStocks = [...stocks, { id: `stock-${Date.now()}`, name: name.trim(), category: "Ingredients", stock: 0, unit: "pcs" }];
+    const nextStocks = [...stocks, { id: `stock-${Date.now()}`, name: name.trim(), stock: 0, unit: "pcs" }];
     setStocks(nextStocks);
     await persistInventory(nextStocks);
   };
@@ -884,38 +879,19 @@ export function SalePurchaseTransactions({
   };
 
   const handleDeleteStock = async (id: string) => {
-    const nextStocks = stocks.filter((s) => s.id !== id);
-    setStocks(nextStocks);
+    const previousStocks = stocks;
+    setStocks((current) => current.filter((s) => s.id !== id));
     setStockNotice(null);
     try {
-      await persistInventory(nextStocks);
+      const result = await deleteAdminRecord("inventory", id);
+      if (result && "error" in result && result.error) {
+        setStocks(previousStocks);
+        setStockNotice(result.error);
+      }
     } catch (error) {
-      setStocks(stocks);
+      setStocks(previousStocks);
       setStockNotice(error instanceof Error ? error.message : "Could not delete that stock item.");
     }
-  };
-
-  const persistRestockChanges = async (nextStocks: StockItem[], nextRestocks: RestockRecord[]) => {
-    const existingById = new Map(store.inventory.map((item) => [item.id, item]));
-    const inventory = nextStocks.map((item) => {
-      const existing = existingById.get(item.id);
-      return {
-        id: item.id,
-        name: item.name,
-        category: item.category || existing?.category || "",
-        stock: item.stock,
-        openingStock: item.openingStock ?? existing?.openingStock,
-        unit: item.unit || existing?.unit || "pcs",
-        cost: existing?.cost ?? 0,
-        maxStock: existing?.maxStock ?? item.stock,
-        purchaseUnitSize: item.purchaseUnitSize,
-        cupUsageAmount: item.cupUsageAmount,
-        cupsMake: item.cupsMake ?? existing?.cupsMake,
-      };
-    });
-    setStocks(nextStocks);
-    setRestocks(nextRestocks);
-    await saveAdminData({ inventory, restocks: nextRestocks });
   };
 
   const handleInlineRestock = async (item: StockItem) => {
@@ -926,15 +902,19 @@ export function SalePurchaseTransactions({
   const addQty = toBaseQuantity(item, pieces);
     const nowTime = getNowDateTime();
 
+    const newRestockId = Date.now().toString() + Math.random();
     const nextStocks = stocks.map((s) => s.id === item.id ? { ...s, stock: s.stock + addQty } : s);
     const newRestock: RestockRecord = {
-      id: Date.now().toString() + Math.random(),
+      id: newRestockId,
       itemName: item.name,
       quantityAdded: addQty,
       date: nowTime,
     };
-    const nextRestocks = [newRestock, ...restocks];
-    await persistRestockChanges(nextStocks, nextRestocks);
+    setStocks(nextStocks);
+    setRestocks((current) => [newRestock, ...current]);
+    // Ledger row + stock adjustment happen in one DB transaction so they
+    // can never diverge (create_restock_atomic).
+    await createRestock({ id: newRestockId, inventoryItemId: item.id, itemNameSnapshot: item.name, quantityAdded: addQty, createdAt: nowTime });
 
     setInlineRestockValues({ ...inlineRestockValues, [item.id]: "" });
   };
@@ -957,6 +937,7 @@ export function SalePurchaseTransactions({
 
     if (editRestockId) {
       const previous = restocks.find((record) => record.id === editRestockId);
+      const previousStockItem = previous ? stocks.find((item) => namesMatch(item.name, previous.itemName)) : undefined;
       const nextRestocks = restocks.map((r) =>
         r.id === editRestockId ? { ...r, itemName: restockItem, quantityAdded: qty, date: stamp } : r,
       );
@@ -973,15 +954,36 @@ export function SalePurchaseTransactions({
           return { ...item, stock };
         });
       }
-      await persistRestockChanges(nextStocks, nextRestocks);
+      setStocks(nextStocks);
+      setRestocks(nextRestocks);
+      // Revert-old + apply-new + ledger update happen in one DB transaction
+      // (edit_restock_atomic).
+      await editRestock({
+        id: editRestockId,
+        oldInventoryItemId: previousStockItem?.id ?? null,
+        oldQuantity: previous?.quantityAdded ?? 0,
+        newInventoryItemId: restockStockItem?.id ?? null,
+        newItemNameSnapshot: restockItem,
+        newQuantity: qty,
+        newCreatedAt: stamp,
+      });
       setEditRestockId(null);
     } else {
-      const newRestock: RestockRecord = { id: Date.now().toString(), itemName: restockItem, quantityAdded: qty, date: stamp };
+      const newRestockId = Date.now().toString();
+      const newRestock: RestockRecord = { id: newRestockId, itemName: restockItem, quantityAdded: qty, date: stamp };
       const nextRestocks = [newRestock, ...restocks];
       const nextStocks = stocks.map((s) =>
         namesMatch(s.name, restockItem) ? { ...s, stock: s.stock + qty } : s,
       );
-      await persistRestockChanges(nextStocks, nextRestocks);
+      setStocks(nextStocks);
+      setRestocks(nextRestocks);
+      await createRestock({
+        id: newRestockId,
+        inventoryItemId: restockStockItem?.id ?? null,
+        itemNameSnapshot: restockItem,
+        quantityAdded: qty,
+        createdAt: stamp,
+      });
     }
     setRestockItem(""); setRestockQty(""); setRestockDate(getTodayDate());
   };
@@ -995,6 +997,7 @@ export function SalePurchaseTransactions({
 
   const handleDeleteRestock = async (id: string) => {
     const record = restocks.find((item) => item.id === id);
+    const matchedItem = record ? stocks.find((item) => namesMatch(item.name, record.itemName)) : undefined;
     if (record) {
       const nextStocks = stocks.map((item) =>
         namesMatch(item.name, record.itemName)
@@ -1002,10 +1005,11 @@ export function SalePurchaseTransactions({
           : item,
       );
       setStocks(nextStocks);
-      await persistInventory(nextStocks);
     }
     setRestocks((current) => current.filter((s) => s.id !== id));
-    await deleteAdminRecord("restock", id);
+    // Ledger delete + stock reversal happen in one DB transaction
+    // (delete_restock_atomic).
+    await deleteRestock({ id, inventoryItemId: matchedItem?.id ?? null, quantityAdded: record?.quantityAdded ?? 0 });
   };
 
   const handleSaveCosting = async (e: React.FormEvent) => {

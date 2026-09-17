@@ -120,7 +120,6 @@ export type StaffUser = {
 export type InventoryItem = {
   id: string;
   name: string;
-  category: string;
   unit: string;
   cost: number;
   stock: number;

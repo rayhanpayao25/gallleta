@@ -7,7 +7,23 @@ import { orderLineOptionsLabel, pricedOrderLine } from "@/lib/menu";
 import { parsePayment } from "@/lib/payments";
 import { ingredientsForOrderLine, roundQty } from "@/lib/inventory";
 import { canUsePos } from "@/lib/users";
-import { getStore, updateStore } from "@/lib/store";
+import {
+  appendPrintJobs,
+  createOrderAtomic,
+  createRestockAtomic,
+  deleteCostingRecord,
+  deleteInventoryItemRecord,
+  deleteOrderAtomic,
+  deleteRecipeCostingRecord,
+  deleteRestockAtomic,
+  deleteRestockRecord,
+  editRestockAtomic,
+  getStore,
+  saveCostingRecord,
+  saveRecipeCostingRecord,
+  updateStore,
+  voidOrderAtomic,
+} from "@/lib/store";
 import type {
   MenuItem,
   Order,
@@ -56,26 +72,6 @@ async function requireInventoryAccess(hasAdminOnlyData: boolean) {
     throw new Error("You do not have permission to change these store records.");
   }
   return session;
-}
-
-function markOrderVoided(store: StoreData, orderId: string, reason: string) {
-  const order = store.orders.find((entry) => entry.id === orderId);
-  if (!order) return "Ticket not found.";
-  if (order.voided) return "Ticket is already voided.";
-
-  order.voided = true;
-  order.voidReason = reason;
-  const updatedAt = new Date().toISOString();
-  for (const job of store.printJobs) {
-    if (
-      job.orderId === orderId &&
-      (job.status === "pending" || job.status === "failed")
-    ) {
-      job.status = "cancelled";
-      job.updatedAt = updatedAt;
-      job.lastError = "Order was voided.";
-    }
-  }
 }
 
 function labelJobsForOrder(
@@ -147,7 +143,42 @@ export async function saveAdminData(data: {
   usageLogs?: StoreData["usageLogs"];
   orders?: StoreData["orders"];
 }) {
-  await requireInventoryAccess(data.costings !== undefined || data.orders !== undefined);
+  await requireInventoryAccess(data.costings !== undefined || data.recipeCostings !== undefined || data.orders !== undefined);
+
+  if (data.costings) {
+    // The client always sends the full resulting costings array (this is
+    // how the existing costing UI already calls saveAdminData for both add
+    // and delete), so reconcile against what's currently persisted: drop
+    // rows that vanished, upsert everything that's present.
+    const current = await getStore();
+    const nextIds = new Set(data.costings.map((entry) => entry.id));
+    for (const existing of current.costings) {
+      if (!nextIds.has(existing.id)) {
+        await deleteCostingRecord(existing.id);
+      }
+    }
+    for (const costing of data.costings) {
+      await saveCostingRecord(costing);
+    }
+  }
+
+  if (data.recipeCostings) {
+    // Same reconcile pattern: saveCostings()/deleteRecipeCosting() in
+    // SalePurchaseTransactions.tsx both send the full resulting
+    // recipeCostings array (a "delete" is just "save the array without
+    // that entry").
+    const current = await getStore();
+    const nextIds = new Set(data.recipeCostings.map((entry) => entry.id));
+    for (const existing of current.recipeCostings) {
+      if (!nextIds.has(existing.id)) {
+        await deleteRecipeCostingRecord(existing.id);
+      }
+    }
+    for (const costing of data.recipeCostings) {
+      await saveRecipeCostingRecord(costing);
+    }
+  }
+
   await updateStore((store) => {
     if (data.inventory) store.inventory = data.inventory;
     if (data.restocks) store.restocks = data.restocks;
@@ -164,21 +195,65 @@ export async function saveAdminData(data: {
 
 export async function deleteAdminRecord(kind: "order" | "inventory" | "restock" | "costing" | "usage", id: string) {
   await requireInventoryAccess(kind === "order" || kind === "costing" || kind === "usage");
-  await updateStore((store) => {
-    if (kind === "order") {
-      store.orders = store.orders.filter((order) => order.id !== id);
-      store.printJobs = store.printJobs.filter((job) => job.orderId !== id);
-      store.usageLogs = store.usageLogs.filter((entry) => entry.orderId !== id);
-    } else if (kind === "inventory") {
-      store.inventory = store.inventory.filter((item) => item.id !== id);
-    } else if (kind === "restock") {
-      store.restocks = store.restocks.filter((record) => record.id !== id);
-    } else if (kind === "costing") {
-      store.costings = store.costings.filter((record) => record.id !== id);
-    } else {
+
+  if (kind === "order") {
+    // delete_order_atomic restores inventory (unless the order was already
+    // voided, which already restored it) and removes usage_logs/order_items
+    // (DB cascade) and the order row, all in one transaction.
+    await deleteOrderAtomic(id);
+  } else if (kind === "restock") {
+    await deleteRestockRecord(id);
+  } else if (kind === "inventory") {
+    const result = await deleteInventoryItemRecord(id);
+    if ("error" in result) return result;
+  } else if (kind === "costing") {
+    await deleteCostingRecord(id);
+  } else {
+    // No live UI deletes a single usage_logs row directly; usage_logs
+    // cleanup for a deleted order is handled by delete_order_atomic's cascade.
+    await updateStore((store) => {
       store.usageLogs = store.usageLogs.filter((record) => record.id !== id);
-    }
-  });
+    });
+  }
+
+  revalidatePath("/pos");
+  revalidatePath("/admin");
+  return { ok: true };
+}
+
+export async function createRestock(input: {
+  id: string;
+  inventoryItemId: string | null;
+  itemNameSnapshot: string;
+  quantityAdded: number;
+  createdAt: string;
+}) {
+  await requireInventoryAccess(false);
+  await createRestockAtomic(input);
+  revalidatePath("/pos");
+  revalidatePath("/admin");
+  return { ok: true };
+}
+
+export async function editRestock(input: {
+  id: string;
+  oldInventoryItemId: string | null;
+  oldQuantity: number;
+  newInventoryItemId: string | null;
+  newItemNameSnapshot: string;
+  newQuantity: number;
+  newCreatedAt: string;
+}) {
+  await requireInventoryAccess(false);
+  await editRestockAtomic(input);
+  revalidatePath("/pos");
+  revalidatePath("/admin");
+  return { ok: true };
+}
+
+export async function deleteRestock(input: { id: string; inventoryItemId: string | null; quantityAdded: number }) {
+  await requireInventoryAccess(false);
+  await deleteRestockAtomic(input);
   revalidatePath("/pos");
   revalidatePath("/admin");
   return { ok: true };
@@ -222,159 +297,108 @@ export async function createOrder(
     return { ok: false as const, error: "Add a drink before charging." };
   }
 
-  const priced: OrderItem[] = [];
-  let error: string | undefined;
-  let charged = 0;
-  let ticketNo = "";
-  let createdId = "";
-  let createdOrder: Order | null = null;
-  let createdPrintJobs: PrintJob[] = [];
-
-  await updateStore((store) => {
-    if (!store.pos.isOpen) {
-      error = "Open the POS before taking orders.";
-      return;
-    }
-
-    for (const line of cart) {
-      const menuItem = store.menu.find((item) => item.id === line.productId);
-      const qty = Number(line.qty);
-      if (!menuItem || !menuItem.available) {
-        error = "One of the items is no longer on the menu.";
-        return;
-      }
-      if (!Number.isSafeInteger(qty) || qty < 1 || qty > 99) {
-        error = "Each item quantity must be a whole number from 1 to 99.";
-        return;
-      }
-      priced.push(pricedOrderLine(menuItem, { ...line, qty }));
-    }
-
-    const requestedStock = new Map<string, number>();
-    for (const line of priced) {
-      for (const ingredient of ingredientsForOrderLine(store, line)) {
-        const normalize = (value: string) => value.trim().toLowerCase().replace(/[-_]+/g, " ").replace(/\s+/g, " ");
-        const inventory = store.inventory.find(
-          (item) =>
-            item.id === ingredient.inventoryItemId ||
-            normalize(item.name) === normalize(ingredient.name),
-        );
-        if (inventory) {
-          requestedStock.set(
-            inventory.id,
-            (requestedStock.get(inventory.id) ?? 0) + ingredient.amount * line.qty,
-          );
-        }
-      }
-    }
-    for (const [inventoryId, requested] of requestedStock) {
-      const inventory = store.inventory.find((item) => item.id === inventoryId);
-      if (inventory && inventory.stock < requested) {
-        error = `Not enough ${inventory.name} in stock.`;
-        return;
-      }
-    }
-
-    const subtotal = priced.reduce((sum, item) => sum + item.price * item.qty, 0);
-    let discount = 0;
-    let promoLabel: string | undefined;
-    if (promoId) {
-      const found = store.promotions.find(
-        (entry) => entry.id === promoId && entry.active,
-      );
-      if (!found) {
-        error = "That promotion is no longer available.";
-        return;
-      }
-      promoLabel = found.label;
-      discount =
-        found.type === "percent"
-          ? Math.round((subtotal * found.value) / 100)
-          : Math.min(subtotal, Math.round(found.value));
-    }
-    const total = Math.max(0, subtotal - discount);
-    const method = parsePayment(paymentMethod);
-    const cashIn =
-      method === "cash" ? Math.max(0, Math.round(Number(tendered) || 0)) : total;
-    if (method === "cash" && cashIn < total) {
-      error = "Cash tendered is short.";
-      return;
-    }
-    charged = total;
-    ticketNo = nextTicketNo(store.orders);
-    const orderId = `ord-${Date.now()}`;
-    createdId = orderId;
-    const createdAt = new Date().toISOString();
-    const usageByItem = new Map<string, StoreData["usageLogs"][number]>();
-
-    for (const line of priced) {
-      const ingredients = ingredientsForOrderLine(store, line);
-      for (const ingredient of ingredients) {
-        const amount = roundQty(ingredient.amount * line.qty);
-        const normalize = (value: string) => value.trim().toLowerCase().replace(/[-_]+/g, " ").replace(/\s+/g, " ");
-        const inventory = store.inventory.find((item) =>
-          item.id === ingredient.inventoryItemId || normalize(item.name) === normalize(ingredient.name),
-        );
-        if (!inventory) continue;
-        inventory.stock = roundQty(Math.max(0, inventory.stock - amount));
-        const existing = usageByItem.get(inventory.id);
-        if (existing) {
-          existing.usedAmount = roundQty(existing.usedAmount + amount);
-          existing.remaining = inventory.stock;
-        } else {
-          usageByItem.set(inventory.id, {
-            id: `${orderId}-${inventory.id}-${usageByItem.size}`,
-            orderId,
-            orderItemId: line.productId,
-            date: createdAt,
-            itemName: inventory.name,
-            usedAmount: amount,
-            unit: ingredient.unit,
-            remaining: inventory.stock,
-          });
-        }
-      }
-    }
-    store.usageLogs = [
-      ...store.usageLogs.filter((entry) => entry.orderId !== orderId),
-      ...usageByItem.values(),
-    ];
-
-    createdOrder = {
-      id: orderId,
-      createdAt,
-      baristaName: session.name,
-      items: priced,
-      subtotal,
-      discount,
-      promoLabel,
-      total,
-      paymentMethod: method,
-      ticketNo,
-      paid: cashIn,
-      change: method === "cash" ? cashIn - total : 0,
-      voided: false,
-    };
-    createdPrintJobs = initialPrintJobs(createdOrder, store.menu);
-    store.orders.push(createdOrder);
-    store.printJobs.push(...createdPrintJobs);
-  });
-
-  if (error) return { ok: false as const, error };
-
-  const orderToPersist = createdOrder as Order | null;
-  if (!orderToPersist) {
-    return { ok: false as const, error: "Unable to create the order." };
+  const store = await getStore();
+  if (!store.pos.isOpen) {
+    return { ok: false as const, error: "Open the POS before taking orders." };
   }
+
+  const priced: OrderItem[] = [];
+  for (const line of cart) {
+    const menuItem = store.menu.find((item) => item.id === line.productId);
+    const qty = Number(line.qty);
+    if (!menuItem || !menuItem.available) {
+      return { ok: false as const, error: "One of the items is no longer on the menu." };
+    }
+    if (!Number.isSafeInteger(qty) || qty < 1 || qty > 99) {
+      return { ok: false as const, error: "Each item quantity must be a whole number from 1 to 99." };
+    }
+    priced.push(pricedOrderLine(menuItem, { ...line, qty }));
+  }
+
+  const subtotal = priced.reduce((sum, item) => sum + item.price * item.qty, 0);
+  let discount = 0;
+  let promoLabel: string | undefined;
+  if (promoId) {
+    const found = store.promotions.find((entry) => entry.id === promoId && entry.active);
+    if (!found) {
+      return { ok: false as const, error: "That promotion is no longer available." };
+    }
+    promoLabel = found.label;
+    discount =
+      found.type === "percent"
+        ? Math.round((subtotal * found.value) / 100)
+        : Math.min(subtotal, Math.round(found.value));
+  }
+  const total = Math.max(0, subtotal - discount);
+  const method = parsePayment(paymentMethod);
+  const cashIn = method === "cash" ? Math.max(0, Math.round(Number(tendered) || 0)) : total;
+  if (method === "cash" && cashIn < total) {
+    return { ok: false as const, error: "Cash tendered is short." };
+  }
+
+  const ticketNo = nextTicketNo(store.orders);
+  const orderId = `ord-${Date.now()}`;
+  const createdAt = new Date().toISOString();
+
+  // Aggregate ingredient deductions per inventory item across all cart
+  // lines (same resolution logic and normalization as before - only the
+  // write path changed). This is the "current server-side recipe/costing
+  // logic" the atomic RPC applies; recipe/costing resolution stays here in
+  // TypeScript rather than being reimplemented in SQL.
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/[-_]+/g, " ").replace(/\s+/g, " ");
+  const deductionsByItem = new Map<string, { itemName: string; amount: number; unit: string; orderItemId: string }>();
+  for (const line of priced) {
+    for (const ingredient of ingredientsForOrderLine(store, line)) {
+      const inventory = store.inventory.find(
+        (item) => item.id === ingredient.inventoryItemId || normalize(item.name) === normalize(ingredient.name),
+      );
+      if (!inventory) continue;
+      const amount = roundQty(ingredient.amount * line.qty);
+      const existing = deductionsByItem.get(inventory.id);
+      if (existing) {
+        existing.amount = roundQty(existing.amount + amount);
+      } else {
+        deductionsByItem.set(inventory.id, { itemName: inventory.name, amount, unit: ingredient.unit, orderItemId: line.productId });
+      }
+    }
+  }
+  const deductions = Array.from(deductionsByItem.entries()).map(([inventoryItemId, value]) => ({
+    inventoryItemId,
+    ...value,
+  }));
+
+  const createdOrder: Order = {
+    id: orderId,
+    createdAt,
+    baristaName: session.name,
+    items: priced,
+    subtotal,
+    discount,
+    promoLabel,
+    total,
+    paymentMethod: method,
+    ticketNo,
+    paid: cashIn,
+    change: method === "cash" ? cashIn - total : 0,
+    voided: false,
+  };
+
+  const result = await createOrderAtomic({ order: createdOrder, deductions });
+  if (!result.ok) {
+    return { ok: false as const, error: result.error };
+  }
+
+  const createdPrintJobs = initialPrintJobs(createdOrder, store.menu);
+  await appendPrintJobs(createdPrintJobs);
 
   revalidatePath("/pos");
   revalidatePath("/admin");
   return {
     ok: true as const,
-    total: charged,
+    total,
     ticketNo,
-    id: createdId,
-    order: createdOrder!,
+    id: orderId,
+    order: createdOrder,
     printJobs: createdPrintJobs,
   };
 }
@@ -413,13 +437,9 @@ export async function voidOrder(
     return { error: "Only a manager can void a transaction." };
   }
 
-  let error: string | undefined;
+  const result = await voidOrderAtomic(orderId, reason.trim(), null);
+  if (!result.ok) return { error: result.error };
 
-  await updateStore((store) => {
-    error = markOrderVoided(store, orderId, reason.trim());
-  });
-
-  if (error) return { error };
   revalidatePath("/pos");
   revalidatePath("/admin");
   return { ok: true };
@@ -570,29 +590,31 @@ export async function deleteVoidRequest(requestId: string) {
 
 export async function approveVoidRequest(requestId: string) {
   const session = await requireAdmin();
-  let error: string | undefined;
 
-  await updateStore((store) => {
-    const request = store.voidRequests.find((entry) => entry.id === requestId);
-    if (!request) {
-      error = "Void request not found.";
-      return;
-    }
-    if (request.status !== "pending") {
-      error = "Void request is already approved.";
-      return;
-    }
+  // voidRequests itself is not yet persisted (out of scope for this phase -
+  // it's a separate, not-yet-durable workflow list, same as before). The
+  // order-level effect of approving one (voiding an existing order, or
+  // creating a new already-voided order for a pre-checkout void) now goes
+  // through the atomic RPCs below rather than a plain in-memory mutation.
+  const store = await getStore();
+  const request = store.voidRequests.find((entry) => entry.id === requestId);
+  if (!request) {
+    return { error: "Void request not found." };
+  }
+  if (request.status !== "pending") {
+    return { error: "Void request is already approved." };
+  }
 
-    if (request.orderId) {
-      error = markOrderVoided(store, request.orderId, request.reason);
-      if (error) return;
-      request.processedOrderId = request.orderId;
-    } else {
-      const createdAt = new Date().toISOString();
-      const createdId = `ord-${Date.now().toString(36)}-${Math.random()
-        .toString(36)
-        .slice(2, 7)}`;
-      store.orders.push({
+  let processedOrderId: string;
+  if (request.orderId) {
+    const result = await voidOrderAtomic(request.orderId, request.reason, null);
+    if (!result.ok) return { error: result.error };
+    processedOrderId = request.orderId;
+  } else {
+    const createdAt = new Date().toISOString();
+    const createdId = `ord-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    const result = await createOrderAtomic({
+      order: {
         id: createdId,
         createdAt,
         baristaName: request.requestedByName,
@@ -607,16 +629,22 @@ export async function approveVoidRequest(requestId: string) {
         change: 0,
         voided: true,
         voidReason: request.reason,
-      });
-      request.processedOrderId = createdId;
-    }
+      },
+      deductions: [],
+    });
+    if (!result.ok) return { error: result.error };
+    processedOrderId = createdId;
+  }
 
-    request.status = "approved";
-    request.approvedAt = new Date().toISOString();
-    request.approvedByName = session.name;
+  await updateStore((innerStore) => {
+    const innerRequest = innerStore.voidRequests.find((entry) => entry.id === requestId);
+    if (!innerRequest) return;
+    innerRequest.status = "approved";
+    innerRequest.processedOrderId = processedOrderId;
+    innerRequest.approvedAt = new Date().toISOString();
+    innerRequest.approvedByName = session.name;
   });
 
-  if (error) return { error };
   revalidatePath("/pos");
   revalidatePath("/admin");
   return { ok: true };

@@ -8,7 +8,17 @@ import {
   getSession,
   sessionCookieOptions,
 } from "@/lib/auth";
-import { updateStore } from "@/lib/store";
+import {
+  deleteLoginActivityRecords,
+  deleteOffRequestRecord,
+  deleteStaffUserRecord,
+  getStore,
+  insertLoginActivityRecord,
+  insertOffRequestRecord,
+  updateLoginActivityTimeRecord,
+  updateOffRequestStatusRecord,
+  updateStore,
+} from "@/lib/store";
 import { phDateString, phIsoFromDateTimeInput } from "@/lib/datetime";
 import { openBaristaShifts } from "@/lib/staff-sessions";
 import {
@@ -18,7 +28,7 @@ import {
   toSession,
 } from "@/lib/users";
 import { sanitizeLoginGate } from "@/lib/staff-gates";
-import type { OffRequest, Role, StaffUser, StoreData } from "@/lib/types";
+import type { LoginActivity, OffRequest, Role, StaffUser, StoreData } from "@/lib/types";
 
 async function requireAdmin() {
   const session = await getSession();
@@ -50,9 +60,15 @@ function looksLikeBarista(user: StaffUser) {
   return /barista/i.test(`${user.title} ${user.username} ${user.name}`);
 }
 
-function appendPunch(store: StoreData, user: StaffUser, type: "login" | "logout", role = user.role) {
+// Still mutates store.loginActivity in memory synchronously (so an
+// "already clocked in" check made later in the same updateStore() queue
+// turn sees this punch immediately, exactly as before persistence was
+// added) - it returns the created entry so the caller can persist it via
+// insertLoginActivityRecord() once this queue turn has finished, rather
+// than nesting a DB call inside updateStore()'s callback.
+function appendPunch(store: StoreData, user: StaffUser, type: "login" | "logout", role = user.role): LoginActivity {
   if (!Array.isArray(store.loginActivity)) store.loginActivity = [];
-  store.loginActivity.unshift({
+  const activity: LoginActivity = {
     id: `auth-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     userId: user.id,
     username: user.username,
@@ -60,8 +76,9 @@ function appendPunch(store: StoreData, user: StaffUser, type: "login" | "logout"
     role,
     type,
     at: new Date().toISOString(),
-  });
-  if (store.loginActivity.length > 300) store.loginActivity.length = 300;
+  };
+  store.loginActivity.unshift(activity);
+  return activity;
 }
 
 function parseStaff(input: {
@@ -207,21 +224,21 @@ export async function deleteStaffUser(id: string) {
     return { error: "You cannot delete the account you are using." };
   }
 
-  let error: string | undefined;
-  await updateStore((store) => {
-    const user = store.users.find((entry) => entry.id === id);
-    if (!user) {
-      error = "Staff account not found.";
-      return;
-    }
-    const admins = store.users.filter((entry) => entry.role === "admin");
-    if (user.role === "admin" && admins.length < 2) {
-      error = "Keep at least one admin account.";
-      return;
-    }
-    store.users = store.users.filter((entry) => entry.id !== id);
-  });
-  if (error) return { error };
+  const store = await getStore();
+  const user = store.users.find((entry) => entry.id === id);
+  if (!user) {
+    return { error: "Staff account not found." };
+  }
+  const admins = store.users.filter((entry) => entry.role === "admin");
+  if (user.role === "admin" && admins.length < 2) {
+    return { error: "Keep at least one admin account." };
+  }
+
+  try {
+    await deleteStaffUserRecord(id);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Could not delete that staff account." };
+  }
   refresh();
   return { ok: true };
 }
@@ -229,15 +246,17 @@ export async function deleteStaffUser(id: string) {
 export async function punchStaff(userId: string, type: "login" | "logout") {
   await requireAdmin();
   let error: string | undefined;
+  let activity: LoginActivity | undefined;
   await updateStore((store) => {
     const user = store.users.find((entry) => entry.id === userId);
     if (!user || user.role === "admin") {
       error = "Pick a staff member.";
       return;
     }
-    appendPunch(store, user, type);
+    activity = appendPunch(store, user, type);
   });
   if (error) return { error };
+  if (activity) await insertLoginActivityRecord(activity);
   refresh();
   return { ok: true };
 }
@@ -252,6 +271,7 @@ export async function punchBaristaShift(input: {
 
   let error: string | undefined;
   let punched: { id: string; name: string; username: string } | undefined;
+  let activity: LoginActivity | undefined;
   await updateStore((store) => {
     const openShifts = openBaristaShifts(store.loginActivity ?? []);
 
@@ -288,7 +308,7 @@ export async function punchBaristaShift(input: {
         user.role = "barista";
         user.title = "Barista";
       }
-      appendPunch(store, user, "login", "barista");
+      activity = appendPunch(store, user, "login", "barista");
       punched = { id: user.id, name: user.name, username: user.username };
       return;
     }
@@ -304,7 +324,7 @@ export async function punchBaristaShift(input: {
       error = "Barista account not found.";
       return;
     }
-    appendPunch(store, user, "logout", "barista");
+    activity = appendPunch(store, user, "logout", "barista");
     punched = { id: user.id, name: user.name, username: user.username };
   });
 
@@ -313,6 +333,7 @@ export async function punchBaristaShift(input: {
       ? { error, id: punched.id, name: punched.name, username: punched.username }
       : { error };
   }
+  if (activity) await insertLoginActivityRecord(activity);
   refresh();
   return { ok: true as const, id: punched?.id ?? "", name: punched?.name ?? "", username: punched?.username ?? "" };
 }
@@ -335,40 +356,35 @@ export async function updateStaffSessionTimes(input: {
     return { error: "Enter a valid date and time." };
   }
 
-  let error: string | undefined;
-  await updateStore((store) => {
-    const login = input.loginId
-      ? store.loginActivity.find((entry) => entry.id === input.loginId && entry.type === "login")
-      : undefined;
-    const logout = input.logoutId
-      ? store.loginActivity.find((entry) => entry.id === input.logoutId && entry.type === "logout")
-      : undefined;
+  const store = await getStore();
+  const login = input.loginId
+    ? store.loginActivity.find((entry) => entry.id === input.loginId && entry.type === "login")
+    : undefined;
+  const logout = input.logoutId
+    ? store.loginActivity.find((entry) => entry.id === input.logoutId && entry.type === "logout")
+    : undefined;
 
-    if ((input.loginId && !login) || (input.logoutId && !logout)) {
-      error = "In / off record not found.";
-      return;
-    }
-    if (login && logout && login.userId !== logout.userId) {
-      error = "The in and off records do not belong to the same staff member.";
-      return;
-    }
+  if ((input.loginId && !login) || (input.logoutId && !logout)) {
+    return { error: "In / off record not found." };
+  }
+  if (login && logout && login.userId !== logout.userId) {
+    return { error: "The in and off records do not belong to the same staff member." };
+  }
 
-    const nextLoginAt = loginAt ?? login?.at;
-    const nextLogoutAt = logoutAt ?? logout?.at;
-    if (
-      nextLoginAt &&
-      nextLogoutAt &&
-      new Date(nextLogoutAt).getTime() < new Date(nextLoginAt).getTime()
-    ) {
-      error = "Off time cannot be earlier than in time.";
-      return;
-    }
+  const nextLoginAt = loginAt ?? login?.at;
+  const nextLogoutAt = logoutAt ?? logout?.at;
+  if (
+    nextLoginAt &&
+    nextLogoutAt &&
+    new Date(nextLogoutAt).getTime() < new Date(nextLoginAt).getTime()
+  ) {
+    return { error: "Off time cannot be earlier than in time." };
+  }
 
-    if (login && loginAt) login.at = loginAt;
-    if (logout && logoutAt) logout.at = logoutAt;
-  });
+  // Targeted single-row updates, not a rebuild of the whole activity array.
+  if (login && loginAt) await updateLoginActivityTimeRecord(login.id, loginAt);
+  if (logout && logoutAt) await updateLoginActivityTimeRecord(logout.id, logoutAt);
 
-  if (error) return { error };
   refresh();
   return { ok: true };
 }
@@ -380,19 +396,16 @@ export async function deleteStaffSession(input: { loginId?: string; logoutId?: s
     return { error: "No in / out record was selected." };
   }
 
-  let removed = false;
-  await updateStore((store) => {
-    const ids = new Set([input.loginId, input.logoutId].filter(Boolean));
-    const existing = store.loginActivity ?? [];
-    const next = existing.filter((entry) => {
-      if (!ids.has(entry.id)) return true;
-      removed = true;
-      return false;
-    });
-    store.loginActivity = next;
-  });
+  const ids = [input.loginId, input.logoutId].filter((id): id is string => Boolean(id));
+  const store = await getStore();
+  const existingIds = new Set(store.loginActivity.map((entry) => entry.id));
+  const found = ids.some((id) => existingIds.has(id));
+  if (!found) return { error: "In / out record not found." };
 
-  if (!removed) return { error: "In / out record not found." };
+  // Delete exactly the rows this session is made of (its loginId and/or
+  // logoutId), not the whole array - other sessions/users are untouched.
+  await deleteLoginActivityRecords(ids);
+
   refresh();
   return { ok: true };
 }
@@ -410,51 +423,41 @@ export async function createOffRequest(input: { userId?: string; date: string; r
     return { error: "Only staff can request off." };
   }
 
-  let error: string | undefined;
-  await updateStore((store) => {
-    const userId = asAdmin ? input.userId : session.userId;
-    const user = store.users.find((entry) => entry.id === userId);
-    if (!user || user.role === "admin") {
-      error = "Pick a staff member.";
-      return;
-    }
-    if (!Array.isArray(store.offRequests)) store.offRequests = [];
-    store.offRequests.unshift({
-      id: `off-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-      userId: user.id,
-      name: user.name,
-      date,
-      reason,
-      status: asAdmin ? "approved" : "pending",
-      createdAt: new Date().toISOString(),
-    });
+  const store = await getStore();
+  const userId = asAdmin ? input.userId : session.userId;
+  const user = store.users.find((entry) => entry.id === userId);
+  if (!user || user.role === "admin") {
+    return { error: "Pick a staff member." };
+  }
+
+  await insertOffRequestRecord({
+    id: `off-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    userId: user.id,
+    name: user.name,
+    date,
+    reason,
+    status: asAdmin ? "approved" : "pending",
+    createdAt: new Date().toISOString(),
   });
-  if (error) return { error };
   refresh();
   return { ok: true };
 }
 
 export async function setOffRequestStatus(id: string, status: OffRequest["status"]) {
   await requireAdmin();
-  let error: string | undefined;
-  await updateStore((store) => {
-    const request = store.offRequests?.find((entry) => entry.id === id);
-    if (!request) {
-      error = "Request not found.";
-      return;
-    }
-    request.status = status;
-  });
-  if (error) return { error };
+  const store = await getStore();
+  const request = store.offRequests?.find((entry) => entry.id === id);
+  if (!request) {
+    return { error: "Request not found." };
+  }
+  await updateOffRequestStatusRecord(id, status);
   refresh();
   return { ok: true };
 }
 
 export async function deleteOffRequest(id: string) {
   await requireAdmin();
-  await updateStore((store) => {
-    store.offRequests = (store.offRequests ?? []).filter((entry) => entry.id !== id);
-  });
+  await deleteOffRequestRecord(id);
   refresh();
   return { ok: true };
 }
