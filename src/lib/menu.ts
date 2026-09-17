@@ -59,6 +59,8 @@ export function normalizeMenuAddons(item: Pick<MenuItem, "addons"> | undefined):
     if (seen.has(id)) id = `${id}-${index}`;
     seen.add(id);
     const inventoryItemId = String(addon.inventoryItemId ?? "").trim();
+    const usageAmount = Math.max(0, Number(addon.usageAmount) || 0);
+    const usageUnit = String(addon.usageUnit ?? "").trim();
     return [
       {
         id,
@@ -66,6 +68,8 @@ export function normalizeMenuAddons(item: Pick<MenuItem, "addons"> | undefined):
         price,
         qtyEnabled: Boolean(addon.qtyEnabled),
         inventoryItemId: inventoryItemId || undefined,
+        usageAmount: usageAmount || undefined,
+        usageUnit: usageUnit || undefined,
       },
     ];
   });
@@ -86,7 +90,15 @@ export function resolveOrderAddons(
     if (!addon) return [];
     const qty = Math.max(0, Math.min(9, Math.floor(Number(entry.qty) || 0)));
     if (qty < 1) return [];
-    return [{ id: addon.id, name: addon.name, price: addon.price, qty: addonAllowsQty(addon) ? qty : 1 }];
+    return [{
+      id: addon.id,
+      name: addon.name,
+      price: addon.price,
+      qty: addonAllowsQty(addon) ? qty : 1,
+      inventoryItemId: addon.inventoryItemId,
+      usageAmount: addon.usageAmount,
+      usageUnit: addon.usageUnit,
+    }];
   });
 }
 
@@ -130,6 +142,14 @@ export function orderLineListLabel(item: OrderItem) {
   const options = orderLineOptionsLabel(item);
   const name = drinkDisplayName(item);
   return options ? `${name} (${options})` : name;
+}
+
+export function orderSoldAsLines(items: OrderItem[]) {
+  return items.map((item) => `${item.qty}x ${orderLineListLabel(item)}`);
+}
+
+export function orderSoldAsLabel(items: OrderItem[]) {
+  return orderSoldAsLines(items).join(", ");
 }
 
 export function cartLineKey(item: Pick<OrderItem, "productId" | "style" | "addons">) {

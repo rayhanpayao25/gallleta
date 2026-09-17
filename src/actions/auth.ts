@@ -1,7 +1,9 @@
 "use server";
 
+import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+
 import {
   SESSION_COOKIE,
   encodeSession,
@@ -34,24 +36,42 @@ export async function login(
 
   const store = await getStore();
   const user = store.users.find(
-    (entry) =>
-      entry.username === username.toLowerCase() &&
-      Boolean(entry.password) &&
-      entry.password === password,
+    (entry) => entry.username.trim().toLowerCase() === username.toLowerCase(),
   );
-  if (!user) {
+
+  if (!user || !user.password) {
     return { error: "Those credentials do not match a commune staff account." };
   }
-  if (user.role !== selectedRole) {
-    return { error: `Those credentials are not for the ${selectedRole} role.` };
+
+  const passwordMatches = user.password.startsWith("$2")
+    ? await bcrypt.compare(password, user.password)
+    : user.password === password;
+  if (!passwordMatches) {
+    return { error: "Those credentials do not match a commune staff account." };
   }
 
-  const session = toSession(user);
+  const titleRole = String(user.title ?? "").trim().toLowerCase();
+  const effectiveRole =
+    titleRole === "admin" || titleRole === "owner" || user.role === "admin"
+      ? "admin"
+      : titleRole === "manager"
+        ? "manager"
+        : /cashier|sale\s+in\s+charge/.test(titleRole)
+          ? "cashier"
+          : user.role;
+  if (selectedRole === "admin" && effectiveRole !== "admin") {
+    return { error: "Those credentials are not for the Admin role." };
+  }
+  if (selectedRole === "cashier" && effectiveRole !== "cashier" && effectiveRole !== "manager") {
+    return { error: "Those credentials are not for the Cashier role." };
+  }
+
+  const session = toSession({ ...user, role: effectiveRole });
   await recordAuthActivity({
     userId: user.id,
     username: user.username,
     name: user.name,
-    role: user.role,
+    role: effectiveRole,
     type: "login",
   });
   const jar = await cookies();
@@ -95,3 +115,4 @@ export async function logout() {
 
   redirect("/");
 }
+

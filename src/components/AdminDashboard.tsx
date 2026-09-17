@@ -5,12 +5,12 @@ import { approveVoidRequest } from "@/actions/pos";
 import { formatMoney, orderLineListLabel } from "@/lib/menu";
 import { phDateTimeLabel } from "@/lib/datetime";
 import { paymentLabel } from "@/lib/payments";
+import { ingredientsForOrderLine } from "@/lib/inventory";
 import {
   bestSellers,
   busiestDay,
   cafeHours,
   categorySales,
-  changePercent,
   lastNDays,
   liveOrders,
   lowSellers,
@@ -51,14 +51,6 @@ function Metric({
       {hint ? <p className="mt-2 text-xs leading-relaxed text-neutral-500">{hint}</p> : null}
     </div>
   );
-}
-
-function deltaHint(current: number, previous: number, suffix: string) {
-  const pct = changePercent(current, previous);
-  if (pct === null) return null;
-  if (pct === 0) return `Even vs ${suffix}`;
-  const sign = pct > 0 ? "+" : "";
-  return `${sign}${pct}% vs ${suffix}`;
 }
 
 function VerticalBars({
@@ -340,7 +332,7 @@ export function AdminDashboard({ store }: { store: StoreData }) {
     }))
     .sort((a, b) => b.qty - a.qty || a.name.localeCompare(b.name));
   
-  const categories = categorySales(productStatsList).filter((item) => item.qty > 0);
+  const categories = categorySales(drinkProductStats(productStatsList)).filter((item) => item.qty > 0);
   
   // Custom mapping para siguraduhing ang bibilangin ay ang total item quantity sa halip na order count lang
   const rawHours = salesByHour(filteredOrdersList, now, rangeType === "week" && activeFilterMode === "range" ? 7 : 1);
@@ -379,14 +371,44 @@ export function AdminDashboard({ store }: { store: StoreData }) {
 
   const netProfitOrLoss = totalSalesAmount - (totalExpensesAmount + totalCreditsAmount);
 
-  const drinksSold = unitsSold(productStatsList);
-  const foodSold = productStatsList
-    .filter((item) => item.category === "Food")
+  const drinksQty = drinkProductStats(productStatsList).reduce((sum, item) => sum + item.qty, 0);
+  const drinksSales = drinkProductStats(productStatsList).reduce((sum, item) => sum + item.sales, 0);
+  const foodSales = productStatsList
+    .filter((item) => /food/i.test(item.category) && !/pastr/i.test(item.category))
+    .reduce((sum, item) => sum + item.sales, 0);
+  const pastriesSales = productStatsList
+    .filter((item) => /pastr/i.test(item.category))
+    .reduce((sum, item) => sum + item.sales, 0);
+  const foodQty = productStatsList
+    .filter((item) => /food/i.test(item.category) && !/pastr/i.test(item.category))
     .reduce((sum, item) => sum + item.qty, 0);
-  const pastriesSold = productStatsList
-    .filter((item) => item.category === "Pastries")
+  const pastryQty = productStatsList
+    .filter((item) => /pastr/i.test(item.category))
     .reduce((sum, item) => sum + item.qty, 0);
-  const totalSold = drinksSold + foodSold + pastriesSold;
+  const totalSoldQty = drinksQty + foodQty + pastryQty;
+  const costByCategory = filteredOrdersList.reduce((totals, order) => {
+    order.items.forEach((line) => {
+      const menuItem = store.menu.find((item) => item.id === line.productId) ?? store.menu.find((item) => item.name.trim().toLowerCase() === line.name.trim().toLowerCase());
+      const category = menuItem?.category ?? "Other";
+      const lineCost = ingredientsForOrderLine(store, line).reduce((sum, ingredient) => {
+        const inventoryItem = store.inventory.find((item) => item.id === ingredient.inventoryItemId);
+        if (!inventoryItem) return sum;
+        const packSize = Number(inventoryItem.purchaseUnitSize) || Number(inventoryItem.cupsMake) || 1;
+        return sum + (Number(ingredient.amount) / packSize) * Number(inventoryItem.cost || 0) * line.qty;
+      }, 0);
+      const normalizedCategory = category.replace(/[^a-z]/gi, "").toLowerCase();
+      const key = /pastr/.test(normalizedCategory)
+        ? "pastries"
+        : /food/.test(normalizedCategory)
+          ? "food"
+          : /drink|coffee|beverage|tea/.test(normalizedCategory)
+            ? "drinks"
+            : null;
+      if (key) totals[key] += lineCost;
+    });
+    return totals;
+  }, { drinks: 0, food: 0, pastries: 0 });
+  const totalCost = costByCategory.drinks + costByCategory.food + costByCategory.pastries;
 
   const computedAverageTicket = filteredOrdersList.length > 0 
     ? totalSalesAmount / filteredOrdersList.length 
@@ -586,13 +608,10 @@ export function AdminDashboard({ store }: { store: StoreData }) {
       ) : null}
 
       <section className="space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-200 pb-3">
+        <div className="border-b border-neutral-200 pb-3">
           <h2 className="text-xs tracking-[0.25em] text-neutral-500 uppercase">
             Performance Overview
           </h2>
-          <span className="rounded bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-600">
-            Selected Range: {activeFilterMode === "range" ? rangeType.toUpperCase() : filterDateStr}
-          </span>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -601,12 +620,10 @@ export function AdminDashboard({ store }: { store: StoreData }) {
               <Metric
                 label="Today's Sales"
                 value={formatMoney(sumSales(today))}
-                hint={`For ${todayDateStr} (vs ${yesterdayDateStr}: ${formatMoney(sumSales(yesterday))})`}
               />
               <Metric
                 label="Today's Orders"
                 value={String(today.length)}
-                hint={deltaHint(today.length, yesterday.length, `yesterday (${yesterdayDateStr})`)}
               />
             </>
           ) : (
@@ -614,12 +631,10 @@ export function AdminDashboard({ store }: { store: StoreData }) {
               <Metric
                 label="Period Sales"
                 value={formatMoney(filteredOrdersList.reduce((s, o) => s + o.total, 0))}
-                hint={`Selected Range Sales`}
               />
               <Metric 
                 label="Period Orders" 
                 value={String(filteredOrdersList.length)} 
-                hint={`Total tickets`} 
               />
             </>
           )}
@@ -627,49 +642,53 @@ export function AdminDashboard({ store }: { store: StoreData }) {
           <Metric
             label="Average Ticket"
             value={formatMoney(computedAverageTicket)}
-            hint={
-              filteredOrdersList.length === 0 
-                ? `No tickets in selected period` 
-                : `${filteredOrdersList.length} tickets in selected period`
-            }
           />
 
           <div className="min-w-0 border border-neutral-200 bg-white p-4 sm:p-5">
             <p className="text-[10px] tracking-[0.2em] text-neutral-500 uppercase sm:text-xs sm:tracking-[0.25em]">
               Sold Products
             </p>
-            <div className="mt-2 space-y-1.5 sm:mt-3">
-              <div className="flex items-baseline justify-between">
-                <span className="text-xs text-neutral-500">Drinks</span>
-                <span className="text-lg font-semibold sm:text-2xl">{drinksSold}</span>
+            <div className="mt-3 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium">Drinks</p>
+                  <p className="text-xs text-neutral-500">{formatMoney(drinksSales)}</p>
+                </div>
+                <p className="text-2xl font-semibold sm:text-3xl">{drinksQty}</p>
               </div>
-              <div className="flex items-baseline justify-between">
-                <span className="text-xs text-neutral-500">Food</span>
-                <span className="text-lg font-semibold sm:text-2xl">{foodSold}</span>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium">Food</p>
+                  <p className="text-xs text-neutral-500">{formatMoney(foodSales)}</p>
+                </div>
+                <p className="text-2xl font-semibold sm:text-3xl">{foodQty}</p>
               </div>
-              <div className="flex items-baseline justify-between">
-                <span className="text-xs text-neutral-500">Pastries</span>
-                <span className="text-lg font-semibold sm:text-2xl">{pastriesSold}</span>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium">Pastries</p>
+                  <p className="text-xs text-neutral-500">{formatMoney(pastriesSales)}</p>
+                </div>
+                <p className="text-2xl font-semibold sm:text-3xl">{pastryQty}</p>
               </div>
-              <div className="flex items-baseline justify-between border-t border-neutral-100 pt-1.5">
-                <span className="text-xs font-medium text-neutral-700">Total Sold</span>
-                <span className="text-lg font-semibold sm:text-2xl">{totalSold}</span>
+              <div className="flex items-center justify-between gap-3 border-t border-neutral-200 pt-3">
+                <div>
+                  <p className="text-sm font-semibold">Total Sold</p>
+                  <p className="text-xs text-neutral-500">{formatMoney(drinksSales + foodSales + pastriesSales)}</p>
+                </div>
+                <p className="text-2xl font-semibold sm:text-3xl">{totalSoldQty}</p>
               </div>
             </div>
-            <p className="mt-2 text-xs leading-relaxed text-neutral-500">Selected period</p>
           </div>
 
           <Metric
             label="Peak Hour"
             value={peak && peak.orders > 0 ? peak.label : "—"}
-            hint={peak && peak.orders > 0 ? `${peak.orders} items · ${formatMoney(peak.sales)}` : "Selected period"}
           />
 
           {rangeType === "week" && (
             <Metric
               label="Busiest Day"
               value={busy?.label ?? "—"}
-              hint={busy ? `${busy.date} · ${formatMoney(busy.sales)}` : null}
             />
           )}
         </div>
@@ -711,9 +730,6 @@ export function AdminDashboard({ store }: { store: StoreData }) {
             <h2 className="text-[10px] tracking-[0.2em] text-neutral-500 uppercase sm:text-xs sm:tracking-[0.25em]">
               Peak hours <span className="hidden sm:inline">(by item volume) · 10:00 AM – 12:00 AM</span>
             </h2>
-            <span className="text-[11px] text-neutral-400">
-              {isTodaySelected ? `Today (${todayDateStr})` : "Selected period"}
-            </span>
           </div>
           <div className="overflow-x-auto">
             <div className="min-w-[560px]">
@@ -771,7 +787,6 @@ export function AdminDashboard({ store }: { store: StoreData }) {
           <h2 className="text-[10px] tracking-[0.2em] text-neutral-500 uppercase sm:text-xs sm:tracking-[0.25em]">
             Sales by category (by item quantity)
           </h2>
-          <p className="mt-1 text-[11px] text-neutral-400">Selected Range</p>
           <HorizontalBars
             empty="No category sales in this period."
             items={categories
@@ -848,11 +863,7 @@ export function AdminDashboard({ store }: { store: StoreData }) {
               Add Expense
             </button>
           </form>
-          ) : (
-            <p className="pt-2 border-t border-neutral-100 text-xs text-neutral-400">
-              View-only. Switch Range to Today to add or delete.
-            </p>
-          )}
+          ) : null}
 
           <div className="overflow-x-auto max-h-48 overflow-y-auto">
             <table className="w-full text-left text-sm">
@@ -932,11 +943,7 @@ export function AdminDashboard({ store }: { store: StoreData }) {
               Add Credit
             </button>
           </form>
-          ) : (
-            <p className="pt-2 border-t border-neutral-100 text-xs text-neutral-400">
-              View-only. Switch Range to Today to add or delete.
-            </p>
-          )}
+          ) : null}
 
           <div className="overflow-x-auto max-h-48 overflow-y-auto">
             <table className="w-full text-left text-sm">
@@ -994,7 +1001,6 @@ export function AdminDashboard({ store }: { store: StoreData }) {
         </div>
         {drinksOpen ? (
           <>
-            <p className="mt-1 text-[11px] text-neutral-400">Breakdown for the selected range</p>
             {drinkSoldRows.length === 0 ? (
               <p className="mt-4 py-6 text-center text-sm text-neutral-500">
                 No drinks sold in this range.
@@ -1084,15 +1090,23 @@ export function AdminDashboard({ store }: { store: StoreData }) {
                       })}
                     </p>
                     <p className="mt-0.5 text-xs text-neutral-500 lg:hidden">{order.baristaName}</p>
-                    {!isVoided(order) ? (
+                    {isVoided(order) ? (
+                      <p className="mt-0.5 text-sm font-medium text-neutral-400 line-through lg:hidden">
+                        {orderIdLabel(order)}
+                      </p>
+                    ) : (
                       <p className="mt-0.5 text-sm font-medium lg:hidden">{orderIdLabel(order)}</p>
-                    ) : null}
+                    )}
                   </div>
                   <p className="hidden min-w-0 break-words text-sm text-neutral-700 lg:block">
                     {order.baristaName}
                   </p>
                   <p className="hidden min-w-0 text-sm font-medium lg:block">
-                    {isVoided(order) ? "" : orderIdLabel(order)}
+                    {isVoided(order) ? (
+                      <span className="text-neutral-400 line-through">{orderIdLabel(order)}</span>
+                    ) : (
+                      orderIdLabel(order)
+                    )}
                   </p>
                   <ul className="min-w-0 list-disc space-y-1 pl-4 text-xs leading-relaxed text-neutral-600 lg:text-sm">
                     {order.items.map((item, itemIdx) => (

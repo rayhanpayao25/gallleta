@@ -126,10 +126,11 @@ export function productStats(
 
   for (const order of liveOrders(orders)) {
     for (const line of order.items) {
+      const matchingMenuItem = map.get(line.productId) ?? menu.find((item) => item.name.trim().toLowerCase() === line.name.trim().toLowerCase());
       const current = map.get(line.productId) ?? {
         id: line.productId,
         name: line.name,
-        category: "Other",
+        category: matchingMenuItem?.category ?? "Other",
         qty: 0,
         sales: 0,
       };
@@ -146,8 +147,8 @@ export function productStats(
 // Helper para i-filter ang Drinks lang
 export function drinkProductStats(stats: ProductStat[]): ProductStat[] {
   return stats.filter((item) => {
-    const cat = item.category.toLowerCase();
-    return cat.includes("drink") || cat.includes("coffee") || cat.includes("beverage") || cat.includes("tea") || (!cat.includes("food") && !cat.includes("pastr") && !cat.includes("snack"));
+    const category = item.category.replace(/[^a-z]/gi, "").toLowerCase();
+    return category !== "other" && category !== "food" && !category.includes("pastr") && category !== "addons" && category !== "addson";
   });
 }
 

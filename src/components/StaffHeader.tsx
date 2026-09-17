@@ -52,8 +52,7 @@ export function StaffHeader({ session, panel, onPanelChange }: StaffHeaderProps)
   return (
     <>
       <header className="relative z-40 border-b border-neutral-200 bg-white px-3 py-3 sm:px-6">
-        <div className="flex min-w-0 items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <button
               type="button"
               aria-label={open ? "Close menu" : "Open menu"}
@@ -71,25 +70,6 @@ export function StaffHeader({ session, panel, onPanelChange }: StaffHeaderProps)
             </button>
             <BrandLogo size="sm" align="start" />
             <p className="truncate text-sm font-medium text-neutral-900">{current}</p>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2">
-            <p className="hidden max-w-[10rem] truncate text-sm text-neutral-400 sm:block">{session.name}</p>
-            <Link
-              href="/"
-              className="rounded-full border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-800 transition hover:border-black hover:bg-black hover:text-white sm:px-4 sm:py-2 sm:text-sm"
-            >
-              Website
-            </Link>
-            <form action={logout}>
-              <button
-                type="submit"
-                className="rounded-full border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-800 transition hover:border-black hover:bg-black hover:text-white sm:px-4 sm:py-2 sm:text-sm"
-              >
-                Log out
-              </button>
-            </form>
-          </div>
         </div>
       </header>
 
@@ -144,7 +124,26 @@ export function StaffHeader({ session, panel, onPanelChange }: StaffHeaderProps)
           })}
         </nav>
 
-        <p className="border-t border-neutral-200 px-5 py-4 text-sm text-neutral-400">{session.name}</p>
+        <div className="border-t border-neutral-200 p-3">
+          <p className="px-4 pb-2 text-sm text-neutral-400">{session.name}</p>
+          <div className="flex flex-col gap-1">
+            <Link
+              href="/"
+              onClick={() => setOpen(false)}
+              className="rounded-2xl px-4 py-3 text-sm font-medium text-neutral-600 transition hover:bg-neutral-100 hover:text-black"
+            >
+              Website
+            </Link>
+            <form action={logout}>
+              <button
+                type="submit"
+                className="w-full rounded-2xl px-4 py-3 text-left text-sm font-medium text-neutral-600 transition hover:bg-neutral-100 hover:text-black"
+              >
+                Log out
+              </button>
+            </form>
+          </div>
+        </div>
       </aside>
     </>
   );

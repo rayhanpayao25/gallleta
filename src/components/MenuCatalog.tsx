@@ -11,11 +11,12 @@ import {
   updateMenuItem,
 } from "@/actions/menu";
 import { addonIdFromName, DRINK_STYLES, drinkStyleLabel, drinkStyleLabelList, formatMoney, isFoodOrPastry, normalizeMenuAddons, normalizeMenuStyles } from "@/lib/menu";
-import type { DrinkStyle, MenuAddon, MenuItem } from "@/lib/types";
+import type { DrinkStyle, InventoryItem, MenuAddon, MenuItem } from "@/lib/types";
 
 type MenuCatalogProps = {
   menu: MenuItem[];
   categories: string[];
+  inventory?: InventoryItem[];
 };
 
 type SubTab = "items" | "categories";
@@ -89,7 +90,7 @@ function actionError(result: unknown) {
   return null;
 }
 
-export function MenuCatalog({ menu, categories }: MenuCatalogProps) {
+export function MenuCatalog({ menu, categories, inventory = [] }: MenuCatalogProps) {
   const [tab, setTab] = useState<SubTab>("items");
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -492,17 +493,21 @@ export function MenuCatalog({ menu, categories }: MenuCatalogProps) {
                   </div>
                   {itemAddons.length === 0 ? (
                     <p className="text-xs text-neutral-400">
-                      Example: Oatside milk ₱30, Extra espresso ₱40. Shots (x2, x3) are chosen on POS.
+                      Example: Oat milk ₱30, Extra espresso ₱40. Set stock + amount so extras deduct inventory (20 ml milk → 100 ml recipe + 20 ml extra = 120 ml).
                     </p>
                   ) : (
                     <div className="space-y-2">
-                      <div className="hidden grid-cols-[1fr_120px_auto] gap-2 text-[11px] text-neutral-400 sm:grid">
+                      <div className="hidden grid-cols-[1fr_88px_1fr_88px_auto] gap-2 text-[11px] text-neutral-400 lg:grid">
                         <span>Name</span>
                         <span>Extra ₱</span>
+                        <span>Deduct from</span>
+                        <span>Amount</span>
                         <span />
                       </div>
-                      {itemAddons.map((addon, index) => (
-                        <div key={addon.id} className="grid grid-cols-[1fr_120px_auto] items-center gap-2">
+                      {itemAddons.map((addon, index) => {
+                        const stock = inventory.find((item) => item.id === addon.inventoryItemId);
+                        return (
+                        <div key={addon.id} className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-[1fr_88px_1fr_88px_auto] lg:items-center">
                           <input
                             value={addon.name}
                             onChange={(event) =>
@@ -512,7 +517,7 @@ export function MenuCatalog({ menu, categories }: MenuCatalogProps) {
                                 ),
                               )
                             }
-                            placeholder="Oatside milk"
+                            placeholder="Oat milk"
                             className={field}
                           />
                           <input
@@ -532,6 +537,56 @@ export function MenuCatalog({ menu, categories }: MenuCatalogProps) {
                             aria-label="Add-on extra price"
                             placeholder="20"
                           />
+                          <select
+                            value={addon.inventoryItemId ?? ""}
+                            onChange={(event) => {
+                              const nextId = event.target.value;
+                              const nextStock = inventory.find((item) => item.id === nextId);
+                              setItemAddons((current) =>
+                                current.map((entry, entryIndex) =>
+                                  entryIndex === index
+                                    ? {
+                                        ...entry,
+                                        inventoryItemId: nextId || undefined,
+                                        usageUnit: nextStock?.unit || entry.usageUnit,
+                                      }
+                                    : entry,
+                                ),
+                              );
+                            }}
+                            className={field}
+                            aria-label="Stock item to deduct"
+                          >
+                            <option value="">No stock deduction</option>
+                            {inventory.map((item) => (
+                              <option key={item.id} value={item.id}>
+                                {item.name}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="flex items-center gap-1">
+                            <input
+                              inputMode="decimal"
+                              value={addon.usageAmount ? String(addon.usageAmount) : ""}
+                              onChange={(event) => {
+                                const raw = event.target.value.replace(/[^\d.]/g, "");
+                                const usageAmount = raw ? Math.max(0, Number(raw)) : 0;
+                                setItemAddons((current) =>
+                                  current.map((entry, entryIndex) =>
+                                    entryIndex === index
+                                      ? { ...entry, usageAmount: usageAmount || undefined }
+                                      : entry,
+                                  ),
+                                );
+                              }}
+                              className={field}
+                              aria-label="Add-on usage amount"
+                              placeholder="20"
+                            />
+                            <span className="shrink-0 text-[11px] text-neutral-400">
+                              {stock?.unit || addon.usageUnit || "ml"}
+                            </span>
+                          </div>
                           <button
                             type="button"
                             aria-label="Remove add-on"
@@ -543,7 +598,8 @@ export function MenuCatalog({ menu, categories }: MenuCatalogProps) {
                             Remove
                           </button>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -595,9 +651,15 @@ export function MenuCatalog({ menu, categories }: MenuCatalogProps) {
                           {normalizeMenuAddons(item).length > 0 ? (
                             <p className="mt-0.5 text-[11px] text-neutral-400">
                               {normalizeMenuAddons(item)
-                                .map((addon) =>
-                                  addon.price > 0 ? `${addon.name} +₱${addon.price}` : addon.name,
-                                )
+                                .map((addon) => {
+                                  const stock = inventory.find((entry) => entry.id === addon.inventoryItemId);
+                                  const extra = addon.price > 0 ? ` +₱${addon.price}` : "";
+                                  const used =
+                                    addon.usageAmount && stock
+                                      ? ` · ${addon.usageAmount}${stock.unit || addon.usageUnit || ""} ${stock.name}`
+                                      : "";
+                                  return `${addon.name}${extra}${used}`;
+                                })
                                 .join(", ")}
                             </p>
                           ) : null}

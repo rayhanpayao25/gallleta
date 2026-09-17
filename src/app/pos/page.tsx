@@ -87,6 +87,9 @@ export default async function PosPage() {
           usageLogs: store.usageLogs ?? [],
           restocks: store.restocks ?? [],
           costings: store.costings ?? [],
+          recipes: store.recipes ?? {},
+          recipeCostings: store.recipeCostings ?? [],
+          menu: store.menu ?? [],
         }}
       />
     </main>

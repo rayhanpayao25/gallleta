@@ -3,8 +3,6 @@ import { normalizeMenuAddons } from "@/lib/menu";
 import type {
   CostingIngredient,
   CostingItem,
-  DrinkStyle,
-  InventoryItem,
   MenuItem,
   OrderItem,
   RecipeIngredient,
@@ -206,60 +204,40 @@ export function cupSkuForItem(item: { id?: string; name: string }) {
   return null;
 }
 
-function findInventory(
-  inventory: InventoryItem[],
-  tester: (item: InventoryItem) => boolean,
-): InventoryItem | undefined {
-  return inventory.find(tester);
-}
+function addonIngredientsForOrderLine(
+  store: Partial<Pick<StoreData, "menu" | "inventory">>,
+  line: OrderItem,
+): RecipeIngredient[] {
+  const menuItem = (store.menu ?? []).find((item) => item.id === line.productId);
+  const catalog = new Map(normalizeMenuAddons(menuItem).map((addon) => [addon.id, addon]));
+  const inventory = store.inventory ?? [];
 
-function isCoffeeCategory(category: string) {
-  const value = category.replace(/-/g, " ").toLowerCase();
-  return value === "special" || value === "classic";
-}
+  return (line.addons ?? []).flatMap((selected) => {
+    const spec = catalog.get(String(selected.id ?? ""));
+    const inventoryItemId = String(spec?.inventoryItemId || selected.inventoryItemId || "").trim();
+    const usageAmount = Number(spec?.usageAmount ?? selected.usageAmount) || 0;
+    const qty = Math.max(1, Number(selected.qty) || 1);
+    const amount = usageAmount * qty;
+    if (amount <= 0) return [];
 
-function isMatchaDrink(name: string, category: string) {
-  return /matcha/i.test(category) || /matcha|hojicha/i.test(name);
-}
+    const stock =
+      inventory.find((item) => item.id === inventoryItemId) ??
+      inventory.find((item) => namesMatch(item.name, spec?.name || selected.name));
+    if (!stock) return [];
 
-function isDrinkCategory(category: string) {
-  const value = category.toLowerCase();
-  return !/food|pastr/.test(value);
-}
-
-function isMilkDrink(category: string) {
-  const value = category.replace(/-/g, " ").toLowerCase();
-  return value.includes("non coffee") || value.includes("fresh");
-}
-
-function styleFromLine(line: { name: string; style?: DrinkStyle }): DrinkStyle | undefined {
-  if (line.style === "hot" || line.style === "iced") return line.style;
-  if (/·\s*hot$/i.test(line.name) || /\(hot\)$/i.test(line.name)) return "hot";
-  if (/·\s*iced$/i.test(line.name) || /\(iced\)$/i.test(line.name)) return "iced";
-  return undefined;
-}
-
-function cupForDrink(
-  category: string,
-  style: DrinkStyle | undefined,
-  peta?: InventoryItem,
-  daba?: InventoryItem,
-  hot?: InventoryItem,
-) {
-  if (style === "hot") return hot ?? peta ?? daba;
-  if (style === "iced") {
-    const value = category.replace(/-/g, " ").toLowerCase();
-    if (value.includes("fresh")) return daba ?? peta ?? hot;
-    return peta ?? daba ?? hot;
-  }
-  const value = category.replace(/-/g, " ").toLowerCase();
-  if (value === "classic") return hot ?? peta ?? daba;
-  if (value.includes("fresh")) return daba ?? peta ?? hot;
-  return peta ?? daba ?? hot;
+    return [
+      {
+        inventoryItemId: stock.id,
+        name: stock.name,
+        amount,
+        unit: (spec?.usageUnit || selected.usageUnit || stock.unit || "").trim() || stock.unit,
+      },
+    ];
+  });
 }
 
 export function ingredientsForOrderLine(
-  store: Partial<Pick<StoreData, "menu" | "recipes" | "recipeCostings">>,
+  store: Partial<Pick<StoreData, "menu" | "recipes" | "recipeCostings" | "inventory">>,
   line: OrderItem,
 ): RecipeIngredient[] {
   const menuItem = (store.menu ?? []).find((item) => item.id === line.productId);
@@ -277,16 +255,34 @@ export function ingredientsForOrderLine(
     return drink === line.productId || normalizedNames.has(normalizedDrink);
   };
   const recipeCostings = store.recipeCostings ?? [];
-  const costing = [...recipeCostings].reverse().find((entry) => entry.drinks.some(matchesDrink));
+  const costing = [...recipeCostings].reverse().find((entry) => entry.menuItems.some(matchesDrink));
 
-  // When costings exist, they are the only source of truth. Never fall back to a stale recipe,
-  // because that can deduct the wrong cup and omit ingredients such as milk.
+  // When costings exist, they are the only source of truth. Never fall back to a stale recipe.
   const recipe = recipeCostings.length > 0
     ? costing?.ingredients ?? []
     : (store.recipes ?? {})[line.productId] ?? Object.entries(store.recipes ?? {}).find(([recipeKey]) => matchesDrink(recipeKey))?.[1] ?? [];
 
-  return recipe.filter((ingredient) => Number(ingredient.amount) > 0);
+  const inventory = store.inventory ?? [];
+  const selectedCostingCupId = line.style === "hot" ? costing?.hotCupInventoryItemId : line.style === "iced" ? costing?.icedCupInventoryItemId : costing?.otherCupInventoryItemId;
+  const configuredCup = selectedCostingCupId ? inventory.find((item) => item.id === selectedCostingCupId) : undefined;
+  const canonicalCupSku = line.style === "hot" ? "cups-hot" : line.style === "iced" ? "cups-peta" : "";
+  const selectedCup = canonicalCupSku
+    ? inventory.find((item) => cupSkuForItem(item)?.id === canonicalCupSku) ?? configuredCup
+    : configuredCup;
+  const resolvedRecipe = recipe.filter((ingredient) => Number(ingredient.amount) > 0).map((ingredient) => {
+    if (!selectedCup || !cupSkuForItem({ id: ingredient.inventoryItemId, name: ingredient.name })) return ingredient;
+    return { ...ingredient, inventoryItemId: selectedCup.id, name: selectedCup.name, unit: selectedCup.unit };
+  });
+  const hasConfiguredCup = resolvedRecipe.some((ingredient) => ingredient.inventoryItemId === selectedCup?.id);
+  const cupIngredient = selectedCup && !hasConfiguredCup
+    ? [{ inventoryItemId: selectedCup.id, name: selectedCup.name, amount: 1, unit: selectedCup.unit }]
+    : [];
 
+  return [
+    ...resolvedRecipe,
+    ...cupIngredient,
+    ...addonIngredientsForOrderLine(store, line),
+  ];
 }
 
 export function recipeForMenuPreview(store: StoreData, item: MenuItem): RecipeIngredient[] {

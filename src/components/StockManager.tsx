@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 
 type StockItem = {
   id: string;
@@ -14,37 +14,10 @@ type StockItem = {
   totalStock?: number;
 };
 
+const STORAGE_KEY = "cafe_stocks_data";
+
 export function StockManager({ title = "Inventory Management" }: { title?: string }) {
-  // Basahin ang nakaraang data mula sa localStorage kapag nag-load ang page
-  const [stocks, setStocks] = useState<StockItem[]>(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("cafe_stocks_data");
-      if (saved) {
-        try {
-          return JSON.parse(saved);
-        } catch (e) {
-          console.error("Failed to parse stocks from localStorage", e);
-        }
-      }
-    }
-    // Default initial items kung wala pang naka-save
-    return [
-      { id: "1", name: "Coffee Beans", category: "Ingredients", unit: "kg", cost: 650, stock: 5, maxStock: 20 },
-      { id: "2", name: "Milk", category: "Dairy", unit: "liters", cost: 95, stock: 10, maxStock: 50 },
-      { id: "3", name: "Matcha Powder", category: "Ingredients", unit: "grams", cost: 450, stock: 300, maxStock: 500 },
-      { id: "4", name: "Peta Cup", category: "Packaging", unit: "pcs", cost: 3, stock: 150, maxStock: 500 },
-      { id: "4b", name: "Daba Cup", category: "Packaging", unit: "pcs", cost: 3, stock: 150, maxStock: 500 },
-      { id: "4c", name: "Hot Cup", category: "Packaging", unit: "pcs", cost: 3, stock: 150, maxStock: 500 },
-    ];
-  });
-
-  // I-save sa localStorage tuwing magbabago ang stocks (pag nag-add o nag-delete)
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem("cafe_stocks_data", JSON.stringify(stocks));
-    }
-  }, [stocks]);
-
+  const [stocks, setStocks] = useState<StockItem[]>([]);
   const [name, setName] = useState("");
   const [category, setCategory] = useState("");
   const [unit, setUnit] = useState("");
@@ -52,7 +25,6 @@ export function StockManager({ title = "Inventory Management" }: { title?: strin
   const [stock, setStock] = useState("");
   const [maxStock, setMaxStock] = useState("");
   const [restockQuantities, setRestockQuantities] = useState<Record<string, string>>({});
-
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editCategory, setEditCategory] = useState("");
@@ -61,22 +33,23 @@ export function StockManager({ title = "Inventory Management" }: { title?: strin
   const [editStock, setEditStock] = useState("");
   const [editMaxStock, setEditMaxStock] = useState("");
 
-  const handleAdd = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name || !category || !unit || !cost || !stock || !maxStock) return;
+  useEffect(() => {
+    const saved = window.localStorage.getItem(STORAGE_KEY);
+    if (!saved) return;
 
-    const newItem: StockItem = {
-      id: Date.now().toString(),
-      name,
-      category,
-      unit,
-      cost: Number(cost),
-      stock: Number(stock),
-      maxStock: Number(maxStock),
-    };
+    try {
+      const parsed: unknown = JSON.parse(saved);
+      if (Array.isArray(parsed)) setStocks(parsed as StockItem[]);
+    } catch (error) {
+      console.error("Failed to parse saved inventory", error);
+    }
+  }, []);
 
-    setStocks([...stocks, newItem]);
+  useEffect(() => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stocks));
+  }, [stocks]);
 
+  const clearForm = () => {
     setName("");
     setCategory("");
     setUnit("");
@@ -85,19 +58,52 @@ export function StockManager({ title = "Inventory Management" }: { title?: strin
     setMaxStock("");
   };
 
+  const handleAdd = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!name.trim() || !category.trim() || !unit.trim()) return;
+
+    const numericCost = Number(cost);
+    const numericStock = Number(stock);
+    const numericMaxStock = Number(maxStock);
+    if (![numericCost, numericStock, numericMaxStock].every(Number.isFinite)) return;
+    if (numericCost < 0 || numericStock < 0 || numericMaxStock < 0) return;
+
+    setStocks((current) => [
+      ...current,
+      {
+        id: crypto.randomUUID(),
+        name: name.trim(),
+        category: category.trim(),
+        unit: unit.trim(),
+        cost: numericCost,
+        stock: numericStock,
+        maxStock: numericMaxStock,
+        totalStock: numericStock,
+        totalUsed: 0,
+      },
+    ]);
+    clearForm();
+  };
+
   const handleDelete = (id: string) => {
-    setStocks(stocks.filter((item) => item.id !== id));
+    setStocks((current) => current.filter((item) => item.id !== id));
   };
 
   const handleRestock = (id: string) => {
     const quantity = Number(restockQuantities[id]);
     if (!Number.isFinite(quantity) || quantity <= 0) return;
 
-    setStocks((currentStocks) => currentStocks.map((item) => {
-      if (item.id !== id) return item;
-      const totalStock = (item.totalStock ?? item.stock + (item.totalUsed ?? 0)) + quantity;
-      return { ...item, stock: item.stock + quantity, totalStock };
-    }));
+    setStocks((current) =>
+      current.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              stock: item.stock + quantity,
+              totalStock: (item.totalStock ?? item.stock + (item.totalUsed ?? 0)) + quantity,
+            }
+          : item,
+      ),
+    );
     setRestockQuantities((current) => ({ ...current, [id]: "" }));
   };
 
@@ -106,179 +112,77 @@ export function StockManager({ title = "Inventory Management" }: { title?: strin
     setEditName(item.name);
     setEditCategory(item.category);
     setEditUnit(item.unit);
-    setEditCost(item.cost.toString());
-    setEditStock(item.stock.toString());
-    setEditMaxStock(item.maxStock.toString());
+    setEditCost(String(item.cost));
+    setEditStock(String(item.stock));
+    setEditMaxStock(String(item.maxStock));
   };
 
   const handleUpdate = (id: string) => {
-    setStocks(
-      stocks.map((item) =>
+    const numericCost = Number(editCost);
+    const numericStock = Number(editStock);
+    const numericMaxStock = Number(editMaxStock);
+    if (!editName.trim() || !editCategory.trim() || !editUnit.trim()) return;
+    if (![numericCost, numericStock, numericMaxStock].every(Number.isFinite)) return;
+    if ([numericCost, numericStock, numericMaxStock].some((value) => value < 0)) return;
+
+    setStocks((current) =>
+      current.map((item) =>
         item.id === id
           ? {
               ...item,
-              name: editName,
-              category: editCategory,
-              unit: editUnit,
-              cost: Number(editCost),
-              stock: Number(editStock),
-              maxStock: Number(editMaxStock),
+              name: editName.trim(),
+              category: editCategory.trim(),
+              unit: editUnit.trim(),
+              cost: numericCost,
+              stock: numericStock,
+              maxStock: numericMaxStock,
             }
-          : item
-      )
+          : item,
+      ),
     );
     setEditingId(null);
   };
 
   return (
-    <div className="p-6 space-y-6">
-      <div>
+    <section className="space-y-6 p-6">
+      <header>
         <h2 className="text-xl font-semibold">{title}</h2>
-        <p className="text-neutral-500 text-sm">Pamahalaan ang mga sangkap at gamit kasama ang cost at status percentage.</p>
-      </div>
+        <p className="text-sm text-neutral-500">Magdagdag at mamahala ng inventory items.</p>
+      </header>
 
-      <form onSubmit={handleAdd} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-7 gap-3 bg-neutral-50 p-4 rounded-xl border border-neutral-200">
-        <input
-          type="text"
-          placeholder="Item Name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="border border-neutral-300 rounded-lg px-3 py-2 text-sm bg-white"
-        />
-        <input
-          type="text"
-          placeholder="Category"
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-          className="border border-neutral-300 rounded-lg px-3 py-2 text-sm bg-white"
-        />
-        <input
-          type="text"
-          placeholder="Unit (kg, L, pcs)"
-          value={unit}
-          onChange={(e) => setUnit(e.target.value)}
-          className="border border-neutral-300 rounded-lg px-3 py-2 text-sm bg-white"
-        />
-        <input
-          type="number"
-          placeholder="Cost (₱)"
-          value={cost}
-          onChange={(e) => setCost(e.target.value)}
-          className="border border-neutral-300 rounded-lg px-3 py-2 text-sm bg-white"
-        />
-        <input
-          type="number"
-          placeholder="Current Stock"
-          value={stock}
-          onChange={(e) => setStock(e.target.value)}
-          className="border border-neutral-300 rounded-lg px-3 py-2 text-sm bg-white"
-        />
-        <input
-          type="number"
-          placeholder="Max Capacity"
-          value={maxStock}
-          onChange={(e) => setMaxStock(e.target.value)}
-          className="border border-neutral-300 rounded-lg px-3 py-2 text-sm bg-white"
-        />
-        <button type="submit" className="bg-black text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-neutral-800 md:col-span-7">
-          Add Inventory Item
-        </button>
+      <form onSubmit={handleAdd} className="grid grid-cols-1 gap-3 rounded-xl border border-neutral-200 bg-neutral-50 p-4 sm:grid-cols-2 md:grid-cols-7">
+        <input required placeholder="Item Name" value={name} onChange={(event) => setName(event.target.value)} className="rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm" />
+        <input required placeholder="Category" value={category} onChange={(event) => setCategory(event.target.value)} className="rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm" />
+        <input required placeholder="Unit (kg, L, pcs)" value={unit} onChange={(event) => setUnit(event.target.value)} className="rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm" />
+        <input required min="0" type="number" placeholder="Cost" value={cost} onChange={(event) => setCost(event.target.value)} className="rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm" />
+        <input required min="0" type="number" placeholder="Current Stock" value={stock} onChange={(event) => setStock(event.target.value)} className="rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm" />
+        <input required min="0" type="number" placeholder="Max Capacity" value={maxStock} onChange={(event) => setMaxStock(event.target.value)} className="rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm" />
+        <button type="submit" className="rounded-lg bg-black px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 md:col-span-7">Add Inventory Item</button>
       </form>
 
-      <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white shadow-sm">
-        <table className="w-full text-left border-collapse text-sm">
-          <thead>
-            <tr className="bg-neutral-50 border-b border-neutral-200 text-neutral-500 font-medium">
-              <th className="p-4">Item Name</th>
-              <th className="p-4">Category</th>
-              <th className="p-4 text-right">Remaining Stock</th>
-              <th className="p-4 text-right">Total Used</th>
-              <th className="p-4 text-right">Total Stock</th>
-              <th className="p-4 text-center">Restock</th>
-              <th className="p-4 text-right">Actions</th>
-            </tr>
-          </thead>
+      <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-white shadow-sm">
+        <table className="w-full min-w-[850px] border-collapse text-left text-sm">
+          <thead><tr className="border-b border-neutral-200 bg-neutral-50 text-neutral-500"><th className="p-4">Item Name</th><th className="p-4">Category</th><th className="p-4 text-right">Remaining</th><th className="p-4 text-right">Total Used</th><th className="p-4 text-right">Total Stock</th><th className="p-4 text-center">Restock</th><th className="p-4 text-right">Actions</th></tr></thead>
           <tbody>
             {stocks.map((item) => {
-              const percentage = item.maxStock > 0 ? Math.min(Math.round((item.stock / item.maxStock) * 100), 100) : 0;
-
-              return (
-                <tr key={item.id} className="border-b border-neutral-100 hover:bg-neutral-50/50">
-                  {editingId === item.id ? (
-                    <>
-                      <td className="p-3">
-                        <input
-                          type="text"
-                          value={editName}
-                          onChange={(e) => setEditName(e.target.value)}
-                          className="border border-neutral-300 rounded px-2 py-1 text-sm w-full"
-                        />
-                      </td>
-                      <td className="p-3">
-                        <input
-                          type="text"
-                          value={editCategory}
-                          onChange={(e) => setEditCategory(e.target.value)}
-                          className="border border-neutral-300 rounded px-2 py-1 text-sm w-full"
-                        />
-                      </td>
-                      <td className="p-3 text-right">
-                        <input
-                          type="number"
-                          value={editStock}
-                          onChange={(e) => setEditStock(e.target.value)}
-                          className="border border-neutral-300 rounded px-2 py-1 text-sm w-20 text-right"
-                        />
-                      </td>
-                      <td className="p-3 text-right text-neutral-500">{item.totalUsed ?? 0}</td>
-                      <td className="p-3 text-right font-semibold">{item.totalStock ?? item.stock + (item.totalUsed ?? 0)}</td>
-                      <td className="p-3 text-center text-xs text-neutral-400">
-                        <input
-                          type="number"
-                          placeholder="Max"
-                          value={editMaxStock}
-                          onChange={(e) => setEditMaxStock(e.target.value)}
-                          className="border border-neutral-300 rounded px-1 py-1 text-xs w-16 text-center"
-                        />
-                      </td>
-                      <td className="p-3 text-right space-x-2">
-                        <button onClick={() => handleUpdate(item.id)} className="text-black font-medium text-xs hover:underline">Save</button>
-                        <button onClick={() => setEditingId(null)} className="text-neutral-500 font-medium text-xs hover:underline">Cancel</button>
-                      </td>
-                    </>
-                  ) : (
-                    <>
-                      <td className="p-4 font-medium">{item.name}</td>
-                      <td className="p-4 text-neutral-600">{item.category}</td>
-                      <td className="p-4 text-right font-semibold">{item.stock}</td>
-                      <td className="p-4 text-right text-red-600">{item.totalUsed ?? 0}</td>
-                      <td className="p-4 text-right font-semibold">{item.totalStock ?? item.stock + (item.totalUsed ?? 0)}</td>
-                      <td className="p-4 text-center">
-                        <div className="flex items-center justify-center gap-2">
-                          <input
-                            type="number"
-                            min="1"
-                            placeholder="+Qty"
-                            value={restockQuantities[item.id] ?? ""}
-                            onChange={(e) => setRestockQuantities((current) => ({ ...current, [item.id]: e.target.value }))}
-                            className="w-20 rounded border border-neutral-300 px-2 py-1 text-center text-xs"
-                            aria-label={`Restock ${item.name}`}
-                          />
-                          <button onClick={() => handleRestock(item.id)} className="rounded bg-black px-3 py-1 text-xs font-medium text-white hover:bg-neutral-800">Add</button>
-                        </div>
-                      </td>
-                      <td className="p-4 text-right space-x-3">
-                        <button onClick={() => startEdit(item)} className="text-black hover:underline text-xs font-medium">Edit</button>
-                        <button onClick={() => handleDelete(item.id)} className="text-red-600 hover:underline text-xs font-medium">Delete</button>
-                      </td>
-                    </>
-                  )}
-                </tr>
-              );
+              const editing = editingId === item.id;
+              return <tr key={item.id} className="border-b border-neutral-100 hover:bg-neutral-50/50">
+                <td className="p-4">{editing ? <input value={editName} onChange={(event) => setEditName(event.target.value)} className="w-full rounded border px-2 py-1" /> : <span className="font-medium">{item.name}</span>}</td>
+                <td className="p-4">{editing ? <input value={editCategory} onChange={(event) => setEditCategory(event.target.value)} className="w-full rounded border px-2 py-1" /> : item.category}</td>
+                <td className="p-4 text-right">{editing ? <input type="number" min="0" value={editStock} onChange={(event) => setEditStock(event.target.value)} className="w-24 rounded border px-2 py-1 text-right" /> : item.stock}</td>
+                <td className="p-4 text-right text-red-600">{item.totalUsed ?? 0}</td>
+                <td className="p-4 text-right font-semibold">{item.totalStock ?? item.stock + (item.totalUsed ?? 0)}</td>
+                <td className="p-4 text-center">{editing ? <input type="number" min="0" value={editMaxStock} onChange={(event) => setEditMaxStock(event.target.value)} className="w-20 rounded border px-2 py-1 text-center" /> : <div className="flex justify-center gap-2"><input type="number" min="1" placeholder="+Qty" value={restockQuantities[item.id] ?? ""} onChange={(event) => setRestockQuantities((current) => ({ ...current, [item.id]: event.target.value }))} className="w-20 rounded border px-2 py-1 text-center" /><button onClick={() => handleRestock(item.id)} className="rounded bg-black px-3 py-1 text-xs text-white">Add</button></div>}</td>
+                <td className="space-x-3 p-4 text-right">{editing ? <><button onClick={() => handleUpdate(item.id)} className="text-xs font-medium hover:underline">Save</button><button onClick={() => setEditingId(null)} className="text-xs text-neutral-500 hover:underline">Cancel</button></> : <><button onClick={() => startEdit(item)} className="text-xs font-medium hover:underline">Edit</button><button onClick={() => handleDelete(item.id)} className="text-xs font-medium text-red-600 hover:underline">Delete</button></>}</td>
+              </tr>;
             })}
           </tbody>
         </table>
+        {stocks.length === 0 && <p className="p-8 text-center text-sm text-neutral-500">No inventory items yet. Add your first item above.</p>}
       </div>
-    </div>
+    </section>
   );
 }
+
+export type { StockItem };
+export default StockManager;
