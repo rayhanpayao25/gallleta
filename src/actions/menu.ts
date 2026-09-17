@@ -4,7 +4,14 @@ import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/auth";
 import { addonIdFromName, isFoodOrPastry, menuItemId, normalizeMenuAddons, normalizeMenuStyles } from "@/lib/menu";
 import type { DrinkStyle, MenuAddon } from "@/lib/types";
-import { updateStore, uploadPublicMenuPhoto } from "@/lib/store";
+import {
+  deleteMenuCategoryRecord,
+  deleteMenuItemRecord,
+  getStore,
+  renameMenuCategoryAtomic,
+  updateStore,
+  uploadPublicMenuPhoto,
+} from "@/lib/store";
 
 const PHOTO_TYPES: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -138,34 +145,21 @@ export async function renameMenuCategory(from: string, to: string) {
   if (!prev) return { error: "Category not found." };
   if (!next) return { error: "Enter a category name." };
 
-  let error: string | undefined;
-  await updateStore((store) => {
-    const taken = store.categories.some(
-      (entry) =>
-        entry.toLowerCase() === next.toLowerCase() &&
-        entry.toLowerCase() !== prev.toLowerCase(),
-    );
-    if (taken) {
-      error = "That category is already on the board.";
-      return;
-    }
+  const store = await getStore();
+  const taken = store.categories.some(
+    (entry) => entry.toLowerCase() === next.toLowerCase() && entry.toLowerCase() !== prev.toLowerCase(),
+  );
+  if (taken) {
+    return { error: "That category is already on the board." };
+  }
 
-    let renamed = false;
-    store.categories = store.categories.map((entry) => {
-      if (entry.toLowerCase() !== prev.toLowerCase()) return entry;
-      renamed = true;
-      return next;
-    });
-    if (!renamed) {
-      store.categories.push(next);
-    }
-    for (const item of store.menu) {
-      if (item.category.toLowerCase() === prev.toLowerCase()) {
-        item.category = next;
-      }
-    }
-  });
-  if (error) return { error };
+  // rename_menu_category_atomic updates the existing row in place (same
+  // slug) or inserts the new one, repoints menu_items.category_id, and
+  // deletes the old row - all in one transaction, so no duplicate/orphaned
+  // category row can be left behind the way the old insert-only path could.
+  const result = await renameMenuCategoryAtomic(prev, next);
+  if (!result.ok) return { error: result.error };
+
   refresh();
   return { ok: true };
 }
@@ -175,20 +169,19 @@ export async function deleteMenuCategory(name: string) {
   const category = name.trim();
   if (!category) return { error: "Category not found." };
 
-  let error: string | undefined;
-  await updateStore((store) => {
-    const inUse = store.menu.some(
-      (item) => item.category.toLowerCase() === category.toLowerCase(),
-    );
-    if (inUse) {
-      error = "Move or delete drinks in this category first.";
-      return;
-    }
-    store.categories = store.categories.filter(
-      (entry) => entry.toLowerCase() !== category.toLowerCase(),
-    );
-  });
-  if (error) return { error };
+  const store = await getStore();
+  const inUse = store.menu.some(
+    (item) => item.category.toLowerCase() === category.toLowerCase(),
+  );
+  if (inUse) {
+    return { error: "Move or delete drinks in this category first." };
+  }
+
+  try {
+    await deleteMenuCategoryRecord(category);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Could not delete that category." };
+  }
   refresh();
   return { ok: true };
 }
@@ -298,9 +291,7 @@ export async function setMenuItemAvailable(id: string, available: boolean) {
 
 export async function deleteMenuItem(id: string) {
   await requireAdmin();
-  await updateStore((store) => {
-    store.menu = store.menu.filter((item) => item.id !== id);
-  });
+  await deleteMenuItemRecord(id);
   refresh();
   return { ok: true };
 }

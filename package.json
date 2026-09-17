@@ -6,20 +6,28 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "cross-env PW_HEADED=1 playwright test --headed --project=chromium",
+    "test:e2e:ui": "playwright test --ui",
+    "test:backend": "playwright test tests/backend"
   },
   "dependencies": {
-    "@supabase/server": "^1.5.3",
+    "@supabase/server": "^1.6.1",
     "@supabase/supabase-js": "^2.116.0",
+    "bcryptjs": "^3.0.3",
     "next": "16.3.4",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4",
+    "@types/bcryptjs": "^3.0.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "cross-env": "^10.1.0",
     "eslint": "^9",
     "eslint-config-next": "16.3.4",
     "tailwindcss": "^4",

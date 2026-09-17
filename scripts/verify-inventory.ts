@@ -17,13 +17,13 @@ const costings = [
 ];
 
 const inventory: InventoryItem[] = [
-  { id: "coffee-beans", name: "Coffee Beans", category: "Ingredients", unit: "grams", cost: 650, stock: 1000, maxStock: 5000 },
-  { id: "milk", name: "Milk", category: "Dairy", unit: "ml", cost: 95, stock: 5000, maxStock: 10000 },
-  { id: "sugar", name: "Sugar", category: "Ingredients", unit: "grams", cost: 80, stock: 1000, maxStock: 5000 },
-  { id: "cups-peta", name: "Peta Cup", category: "Packaging", unit: "pcs", cost: 3, stock: 200, maxStock: 1000 },
-  { id: "cups-daba", name: "Daba Cup", category: "Packaging", unit: "pcs", cost: 3, stock: 200, maxStock: 1000 },
-  { id: "cups-hot", name: "Hot Cup", category: "Packaging", unit: "pcs", cost: 3, stock: 200, maxStock: 1000 },
-  { id: "matcha-powder", name: "Matcha Powder", category: "Ingredients", unit: "grams", cost: 450, stock: 500, maxStock: 1000 },
+  { id: "coffee-beans", name: "Coffee Beans", unit: "grams", cost: 650, stock: 1000, maxStock: 5000 },
+  { id: "milk", name: "Milk", unit: "ml", cost: 95, stock: 5000, maxStock: 10000 },
+  { id: "sugar", name: "Sugar", unit: "grams", cost: 80, stock: 1000, maxStock: 5000 },
+  { id: "cups-peta", name: "Peta Cup", unit: "pcs", cost: 3, stock: 200, maxStock: 1000 },
+  { id: "cups-daba", name: "Daba Cup", unit: "pcs", cost: 3, stock: 200, maxStock: 1000 },
+  { id: "cups-hot", name: "Hot Cup", unit: "pcs", cost: 3, stock: 200, maxStock: 1000 },
+  { id: "matcha-powder", name: "Matcha Powder", unit: "grams", cost: 450, stock: 500, maxStock: 1000 },
 ];
 
 const store = {

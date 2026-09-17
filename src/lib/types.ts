@@ -15,6 +15,8 @@ export type MenuAddon = {
   price: number;
   qtyEnabled?: boolean;
   inventoryItemId?: string;
+  usageAmount?: number;
+  usageUnit?: string;
 };
 
 export type OrderAddon = {
@@ -22,6 +24,9 @@ export type OrderAddon = {
   name: string;
   price: number;
   qty: number;
+  inventoryItemId?: string;
+  usageAmount?: number;
+  usageUnit?: string;
 };
 
 export type MenuItem = {
@@ -115,7 +120,6 @@ export type StaffUser = {
 export type InventoryItem = {
   id: string;
   name: string;
-  category: string;
   unit: string;
   cost: number;
   stock: number;
@@ -136,8 +140,11 @@ export type RecipeIngredient = {
 export type RecipeCosting = {
   id: string;
   name: string;
-  drinks: string[];
+  menuItems: string[];
   ingredients: RecipeIngredient[];
+  hotCupInventoryItemId?: string;
+  icedCupInventoryItemId?: string;
+  otherCupInventoryItemId?: string;
 };
 
 export type UsageLog = {
