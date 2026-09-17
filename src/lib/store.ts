@@ -11,7 +11,7 @@ import type {
   StaffUser,
   StoreData,
 } from "@/lib/types";
-import { CUP_SKUS, cupSkuForItem } from "@/lib/inventory";
+
 import { DEFAULT_MENU, MENU_CATEGORIES, normalizeMenuAddons, normalizeMenuStyles } from "@/lib/menu";
 import { parsePayment } from "@/lib/payments";
 import { DEFAULT_LOGIN_GATES, normalizeLoginGates } from "@/lib/staff-gates";
@@ -39,12 +39,14 @@ export function supabaseAdmin() {
     "commume_coffee_SUPABASE_URL",
     "NEXT_PUBLIC_commume_coffee_SUPABASE_URL",
   );
+  // Prefer the current service-role key. The older secret-key aliases may contain
+  // a stale JWT whose `iat` is ahead of the runtime clock, causing every query to fail.
   const key = env(
-    "SUPABASE_SECRET_KEY",
-    "commume_coffee_SUPABASE_SECRET_KEY",
     "SUPABASE_SERVICE_ROLE_KEY",
     "commume_coffee_SUPABASE_SERVICE_ROLE_KEY",
     "SUPABASE_SERVICE_ROLE_KEY_2",
+    "SUPABASE_SECRET_KEY",
+    "commume_coffee_SUPABASE_SECRET_KEY",
   );
 
   if (!url || !key) {
@@ -62,98 +64,23 @@ export function supabaseAdmin() {
   });
 }
 
-function seedOrders(): Order[] {
-  const items = [
-    { productId: "spanish-latte", name: "Spanish Latte", price: 149 },
-    { productId: "seasalt-cream", name: "Sea Salt Cream", price: 159 },
-    { productId: "matcha-umami", name: "Matcha Umami", price: 169 },
-    { productId: "cookie-crumble", name: "Cookie Crumble", price: 159 },
-    { productId: "biscoff-latte", name: "Biscoff Latte", price: 169 },
-    { productId: "caramel-macchiato", name: "Caramel Macchiato", price: 159 },
-    { productId: "strawberry-crumble", name: "Strawberry Crumble", price: 159 },
-    { productId: "panini", name: "Panini", price: 189 },
-  ];
-
-  const orders: Order[] = [];
-  const now = new Date("2026-09-07T16:00:00+07:00");
-
-  for (let dayOffset = 6; dayOffset >= 0; dayOffset -= 1) {
-    const count = 4 + ((6 - dayOffset) % 3);
-    for (let i = 0; i < count; i += 1) {
-      const date = new Date(now);
-      date.setDate(now.getDate() - dayOffset);
-      date.setHours(11 + i, 10 + i * 7, 0, 0);
-      const picked = items[(i + dayOffset) % items.length];
-      const extra = items[(i + dayOffset + 2) % items.length];
-      const qty = 1 + (i % 2);
-      const lineItems = [
-        {
-          productId: picked.productId,
-          name: picked.name,
-          qty,
-          price: picked.price,
-        },
-      ];
-      if (i % 2 === 0) {
-        lineItems.push({
-          productId: extra.productId,
-          name: extra.name,
-          qty: 1,
-          price: extra.price,
-        });
-      }
-      const total = lineItems.reduce(
-        (sum, item) => sum + item.price * item.qty,
-        0,
-      );
-      orders.push({
-        id: `ord-${dayOffset}-${i}`,
-        createdAt: date.toISOString(),
-        baristaName: "Sale In Charge",
-        items: lineItems,
-        total: Number(total.toFixed(2)),
-        paymentMethod: (["cash", "gcash", "maya"] as const)[i % 3],
-      });
-    }
-  }
-
-  return orders;
-}
-
-const DEFAULT_INVENTORY: InventoryItem[] = [
-  { id: "coffee-beans", name: "Coffee Beans", category: "Ingredients", unit: "grams", cost: 650, stock: 1000, maxStock: 5000 },
-  { id: "milk", name: "Milk", category: "Dairy", unit: "ml", cost: 95, stock: 5000, maxStock: 10000 },
-  { id: "sugar", name: "Sugar", category: "Ingredients", unit: "grams", cost: 80, stock: 1000, maxStock: 5000 },
-  { id: "cups-peta", name: "Peta Cup", category: "Packaging", unit: "pcs", cost: 3, stock: 200, maxStock: 1000 },
-  { id: "cups-daba", name: "Daba Cup", category: "Packaging", unit: "pcs", cost: 3, stock: 200, maxStock: 1000 },
-  { id: "cups-hot", name: "Hot Cup", category: "Packaging", unit: "pcs", cost: 3, stock: 200, maxStock: 1000 },
-  { id: "matcha-powder", name: "Matcha Powder", category: "Ingredients", unit: "grams", cost: 450, stock: 500, maxStock: 1000 },
-];
-
-const DEFAULT_COSTINGS: CostingItem[] = [
-  { id: "cost-coffee-beans", productName: "Coffee Beans", ingredients: [{ name: "Coffee Beans", amount: 1000, unit: "grams", outputCups: 55 }] },
-  { id: "cost-milk", productName: "Milk", ingredients: [{ name: "Milk", amount: 1000, unit: "ml", outputCups: 75 }] },
-  { id: "cost-sugar", productName: "Sugar", ingredients: [{ name: "Sugar", amount: 1000, unit: "grams", outputCups: 100 }] },
-  { id: "cost-matcha", productName: "Matcha Powder", ingredients: [{ name: "Matcha Powder", amount: 150, unit: "grams", outputCups: 15 }] },
-];
-
 const DEFAULT_RECIPES: Record<string, RecipeIngredient[]> = {};
 
 function emptyStore(): StoreData {
   return {
     pos: { isOpen: false, openedAt: null, openedBy: null },
-    orders: seedOrders(),
+    orders: [],
     printJobs: [],
     menu: DEFAULT_MENU.map((item) => ({ ...item })),
     categories: [...MENU_CATEGORIES],
     promotions: DEFAULT_PROMOS.map((item) => ({ ...item })),
     users: DEFAULT_USERS.map((item) => ({ ...item })),
-    inventory: DEFAULT_INVENTORY.map((item) => ({ ...item })),
+    inventory: [],
   recipes: structuredClone(DEFAULT_RECIPES),
   recipeCostings: [],
   usageLogs: [],
     restocks: [],
-    costings: structuredClone(DEFAULT_COSTINGS),
+    costings: [],
     loginActivity: [],
     offRequests: [],
     voidRequests: [],
@@ -161,47 +88,6 @@ function emptyStore(): StoreData {
   };
 }
 
-function isGenericCups(item: InventoryItem) {
-  return item.id === "cups" || /^cups?$/i.test(item.name.trim());
-}
-
-function cupTemplate(sku: (typeof CUP_SKUS)[number]): InventoryItem {
-  return {
-    id: sku.id,
-    name: sku.name,
-    category: "Packaging",
-    unit: "pcs",
-    cost: 3,
-    stock: 200,
-    maxStock: 1000,
-  };
-}
-
-function ensureCupTypes(inventory: InventoryItem[]): InventoryItem[] {
-  const generic = inventory.find(isGenericCups);
-  const next = inventory
-    .filter((item) => !isGenericCups(item))
-    .map((item) => {
-      const sku = cupSkuForItem(item);
-      return sku && item.name !== sku.name ? { ...item, name: sku.name } : item;
-    });
-  const leftover = generic?.stock ?? 0;
-  const missing = CUP_SKUS.filter((sku) => !next.some((item) => cupSkuForItem(item)?.id === sku.id));
-  const share = missing.length > 0 ? Math.floor(leftover / missing.length) : 0;
-  let remainder = leftover - share * missing.length;
-
-  for (const sku of CUP_SKUS) {
-    if (next.some((item) => cupSkuForItem(item)?.id === sku.id)) continue;
-    next.push({
-      ...cupTemplate(sku),
-      stock: share + (remainder > 0 ? 1 : 0),
-      maxStock: generic?.maxStock || 1000,
-      cost: generic?.cost || 3,
-    });
-    if (remainder > 0) remainder -= 1;
-  }
-  return next;
-}
 
 function uniqueCategories(values: string[]): string[] {
   const seen = new Set<string>();
@@ -297,7 +183,7 @@ function normalizeStore(store: StoreData): StoreData {
     }));
   }
   if (!Array.isArray(store.inventory)) {
-    store.inventory = DEFAULT_INVENTORY.map((item) => ({ ...item }));
+    store.inventory = [];
   } else {
     store.inventory = store.inventory.map((item) => ({
       ...item,
@@ -306,7 +192,7 @@ function normalizeStore(store: StoreData): StoreData {
       cost: Number(item.cost) || 0,
       unit: item.unit || "pcs",
     }));
-    store.inventory = ensureCupTypes(store.inventory);
+
   }
   if (!Array.isArray(store.recipeCostings)) {
     store.recipeCostings = [];
@@ -405,17 +291,6 @@ function normalizeStore(store: StoreData): StoreData {
   }
   store.loginGates = normalizeLoginGates(store.loginGates);
 
-  const matchaInventory = store.inventory.find((item) => /matcha/i.test(item.name));
-  const hasMatchaCosting = store.costings.some((costing) =>
-    costing.ingredients.some((ingredient) => /matcha/i.test(ingredient.name)),
-  );
-  if (matchaInventory && !hasMatchaCosting) {
-    store.costings.push({
-      id: "cost-matcha-powder",
-      productName: "Matcha Powder",
-      ingredients: [{ name: matchaInventory.name, amount: 150, unit: "grams", outputCups: 15 }],
-    });
-  }
 
   if (!Array.isArray(store.users) || store.users.length === 0) {
     store.users = DEFAULT_USERS.map((item) => ({ ...item }));
@@ -510,7 +385,15 @@ async function readStore(): Promise<StoreData> {
     supabase.from("recipes").select("*").order("created_at"),
   ]);
   const firstError = [pos, users, categories, menu, promotions, inventory, orders, orderItems, usageLogs, restocks, costings, costingIngredients, recipes].find((result) => result.error)?.error;
-  if (firstError) throw new Error(`Unable to read store data: ${firstError.message}`);
+  if (firstError) {
+    const message = firstError.message;
+    if (/JWT issued at future/i.test(message)) {
+      throw new Error(
+        "Unable to read store data: Supabase rejected the configured server key because its JWT timestamp is in the future. Refresh SUPABASE_SECRET_KEY/SUPABASE_SERVICE_ROLE_KEY in the project Vars, confirm the key belongs to this Supabase project, then restart the preview.",
+      );
+    }
+    throw new Error(`Unable to read store data: ${message}`);
+  }
 
   const base = emptyStore();
   const rows = orders.data ?? [];
@@ -649,6 +532,11 @@ async function writeStore(store: StoreData): Promise<void> {
     voided: order.voided ?? false,
     void_reason: order.voidReason ?? null,
   }));
+
+  // Admin-side removal only changes the current application view.
+  // Never delete orders from Supabase during a normal store save.
+  // Permanent deletion must be performed explicitly against the database.
+
   const { error: ordersError } = await supabase
     .from("orders")
     .upsert(orderRows, { onConflict: "id" });
@@ -656,6 +544,7 @@ async function writeStore(store: StoreData): Promise<void> {
   if (ordersError) {
     throw new Error(`Unable to save orders: ${ordersError.message}`);
   }
+
 
   const operations = await Promise.all([
     supabase.from("pos_state").upsert({ id: POS_STATE_ID, is_open: store.pos.isOpen, opened_at: store.pos.openedAt, opened_by_name: store.pos.openedBy, updated_at: new Date().toISOString() }),
