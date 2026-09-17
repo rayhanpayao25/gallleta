@@ -9,6 +9,7 @@ import { ingredientsForOrderLine, roundQty } from "@/lib/inventory";
 import { canUsePos } from "@/lib/users";
 import {
   appendPrintJobs,
+  approveVoidRequestAtomic,
   createOrderAtomic,
   createRestockAtomic,
   deleteCostingRecord,
@@ -17,8 +18,12 @@ import {
   deleteRecipeCostingRecord,
   deleteRestockAtomic,
   deleteRestockRecord,
+  deleteVoidRequestRecord,
   editRestockAtomic,
+  getFreshStore,
   getStore,
+  getVoidRequestRecord,
+  insertVoidRequestRecord,
   saveCostingRecord,
   saveRecipeCostingRecord,
   updateStore,
@@ -456,82 +461,78 @@ export async function requestVoidApproval(
   const trimmedReason = reason.trim();
   if (!trimmedReason) return { error: "Enter a reason for voiding." };
 
-  let error: string | undefined;
-  let requestId = "";
+  // Validation needs current data (order state, menu, promos, existing
+  // pending requests), not the TTL-cached snapshot.
+  const store = await getFreshStore();
 
-  await updateStore((store) => {
-    if (
-      store.voidRequests.some(
-        (request) =>
-          request.requestedById === session.userId && request.status === "pending",
-      )
-    ) {
-      error = "You already have a void request waiting for admin approval.";
-      return;
+  if (
+    store.voidRequests.some(
+      (request) =>
+        request.requestedById === session.userId && request.status === "pending",
+    )
+  ) {
+    return { error: "You already have a void request waiting for admin approval." };
+  }
+
+  const existingOrder = orderId
+    ? store.orders.find((order) => order.id === orderId)
+    : undefined;
+  if (orderId && !existingOrder) {
+    return { error: "Ticket not found." };
+  }
+  if (existingOrder?.voided) {
+    return { error: "Ticket is already voided." };
+  }
+
+  let items: OrderItem[] = [];
+  let subtotal = 0;
+  let discount = 0;
+  let promoLabel: string | undefined;
+  let total = 0;
+  let requestedPayment = parsePayment(paymentMethod);
+
+  if (existingOrder) {
+    items = existingOrder.items.map((item) => ({ ...item }));
+    subtotal = existingOrder.subtotal ?? existingOrder.total;
+    discount = existingOrder.discount ?? 0;
+    promoLabel = existingOrder.promoLabel;
+    total = existingOrder.total;
+    requestedPayment = parsePayment(existingOrder.paymentMethod);
+  } else {
+    if (cart.length === 0) {
+      return { error: "No items to void." };
     }
-
-    const existingOrder = orderId
-      ? store.orders.find((order) => order.id === orderId)
+    for (const line of cart) {
+      const menuItem = store.menu.find((item) => item.id === line.productId);
+      const qty = Number(line.qty);
+      if (!menuItem) {
+        return { error: "One of the items is no longer on the menu." };
+      }
+      if (!Number.isSafeInteger(qty) || qty < 1 || qty > 99) {
+        return { error: "Each item quantity must be a whole number from 1 to 99." };
+      }
+      items.push(pricedOrderLine(menuItem, { ...line, qty }));
+    }
+    subtotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
+    const promotion = promoId
+      ? store.promotions.find((entry) => entry.id === promoId && entry.active)
       : undefined;
-    if (orderId && !existingOrder) {
-      error = "Ticket not found.";
-      return;
+    if (promotion) {
+      promoLabel = promotion.label;
+      discount =
+        promotion.type === "percent"
+          ? Math.round((subtotal * promotion.value) / 100)
+          : Math.min(subtotal, Math.round(promotion.value));
     }
-    if (existingOrder?.voided) {
-      error = "Ticket is already voided.";
-      return;
-    }
+    total = Math.max(0, subtotal - discount);
+  }
 
-    let items: OrderItem[] = [];
-    let subtotal = 0;
-    let discount = 0;
-    let promoLabel: string | undefined;
-    let total = 0;
-    let requestedPayment = parsePayment(paymentMethod);
+  const requestId = `void-request-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 7)}`;
 
-    if (existingOrder) {
-      items = existingOrder.items.map((item) => ({ ...item }));
-      subtotal = existingOrder.subtotal ?? existingOrder.total;
-      discount = existingOrder.discount ?? 0;
-      promoLabel = existingOrder.promoLabel;
-      total = existingOrder.total;
-      requestedPayment = parsePayment(existingOrder.paymentMethod);
-    } else {
-      if (cart.length === 0) {
-        error = "No items to void.";
-        return;
-      }
-      for (const line of cart) {
-        const menuItem = store.menu.find((item) => item.id === line.productId);
-        const qty = Number(line.qty);
-        if (!menuItem) {
-          error = "One of the items is no longer on the menu.";
-          return;
-        }
-        if (!Number.isSafeInteger(qty) || qty < 1 || qty > 99) {
-          error = "Each item quantity must be a whole number from 1 to 99.";
-          return;
-        }
-        items.push(pricedOrderLine(menuItem, { ...line, qty }));
-      }
-      subtotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
-      const promotion = promoId
-        ? store.promotions.find((entry) => entry.id === promoId && entry.active)
-        : undefined;
-      if (promotion) {
-        promoLabel = promotion.label;
-        discount =
-          promotion.type === "percent"
-            ? Math.round((subtotal * promotion.value) / 100)
-            : Math.min(subtotal, Math.round(promotion.value));
-      }
-      total = Math.max(0, subtotal - discount);
-    }
-
-    requestId = `void-request-${Date.now().toString(36)}-${Math.random()
-      .toString(36)
-      .slice(2, 7)}`;
-    store.voidRequests.unshift({
+  try {
+    await insertVoidRequestRecord({
       id: requestId,
       requestedAt: new Date().toISOString(),
       requestedById: session.userId,
@@ -546,9 +547,15 @@ export async function requestVoidApproval(
       total,
       paymentMethod: requestedPayment,
     });
-  });
+  } catch (insertError) {
+    // The partial unique index enforces one pending request per cashier at
+    // the DB level, so a cross-instance double-submit lands here.
+    if (/one_pending_per_user/.test((insertError as Error).message)) {
+      return { error: "You already have a void request waiting for admin approval." };
+    }
+    throw insertError;
+  }
 
-  if (error) return { error };
   revalidatePath("/pos");
   revalidatePath("/admin");
   return { ok: true, requestId };
@@ -556,8 +563,9 @@ export async function requestVoidApproval(
 
 export async function getVoidRequestStatus(requestId: string) {
   const session = await requirePos();
-  const store = await getStore();
-  const request = store.voidRequests.find((entry) => entry.id === requestId);
+  // Targeted DB read, not the cached store: a cashier polling on one
+  // instance must see an approval committed by another instance promptly.
+  const request = await getVoidRequestRecord(requestId);
   if (!request || request.requestedById !== session.userId) {
     return { found: false as const };
   }
@@ -571,18 +579,13 @@ export async function getVoidRequestStatus(requestId: string) {
 
 export async function deleteVoidRequest(requestId: string) {
   await requireAdmin();
-  let error: string | undefined;
+  const request = await getVoidRequestRecord(requestId);
+  if (!request) {
+    return { error: "Void request not found." };
+  }
 
-  await updateStore((store) => {
-    const request = store.voidRequests.find((entry) => entry.id === requestId);
-    if (!request) {
-      error = "Void request not found.";
-      return;
-    }
-    store.voidRequests = store.voidRequests.filter((entry) => entry.id !== requestId);
-  });
+  await deleteVoidRequestRecord(requestId);
 
-  if (error) return { error };
   revalidatePath("/pos");
   revalidatePath("/admin");
   return { ok: true };
@@ -591,13 +594,9 @@ export async function deleteVoidRequest(requestId: string) {
 export async function approveVoidRequest(requestId: string) {
   const session = await requireAdmin();
 
-  // voidRequests itself is not yet persisted (out of scope for this phase -
-  // it's a separate, not-yet-durable workflow list, same as before). The
-  // order-level effect of approving one (voiding an existing order, or
-  // creating a new already-voided order for a pre-checkout void) now goes
-  // through the atomic RPCs below rather than a plain in-memory mutation.
-  const store = await getStore();
-  const request = store.voidRequests.find((entry) => entry.id === requestId);
+  // Read the request directly so the check runs against durable state, not
+  // a cached snapshot that could be stale on this instance.
+  const request = await getVoidRequestRecord(requestId);
   if (!request) {
     return { error: "Void request not found." };
   }
@@ -605,45 +604,26 @@ export async function approveVoidRequest(requestId: string) {
     return { error: "Void request is already approved." };
   }
 
-  let processedOrderId: string;
-  if (request.orderId) {
-    const result = await voidOrderAtomic(request.orderId, request.reason, null);
-    if (!result.ok) return { error: result.error };
-    processedOrderId = request.orderId;
-  } else {
-    const createdAt = new Date().toISOString();
-    const createdId = `ord-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-    const result = await createOrderAtomic({
-      order: {
-        id: createdId,
-        createdAt,
-        baristaName: request.requestedByName,
-        items: request.items.map((item) => ({ ...item })),
-        subtotal: request.subtotal,
-        discount: request.discount,
-        promoLabel: request.promoLabel,
-        total: request.total,
-        paymentMethod: request.paymentMethod,
-        ticketNo: nextTicketNo(store.orders),
-        paid: 0,
-        change: 0,
-        voided: true,
-        voidReason: request.reason,
-      },
-      deductions: [],
-    });
-    if (!result.ok) return { error: result.error };
-    processedOrderId = createdId;
-  }
+  // For a pre-checkout request the RPC needs the id/ticket number of the
+  // already-voided order it will create; ticket numbering is display-only
+  // so a cached order list is fine here.
+  const newOrderId = request.orderId
+    ? null
+    : `ord-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  const ticketNo = request.orderId ? null : nextTicketNo((await getStore()).orders);
 
-  await updateStore((innerStore) => {
-    const innerRequest = innerStore.voidRequests.find((entry) => entry.id === requestId);
-    if (!innerRequest) return;
-    innerRequest.status = "approved";
-    innerRequest.processedOrderId = processedOrderId;
-    innerRequest.approvedAt = new Date().toISOString();
-    innerRequest.approvedByName = session.name;
+  // approve_void_request_atomic performs the request status update AND the
+  // order effect in one DB transaction (void_order_atomic for an existing
+  // order, create_order_atomic for a pre-checkout request), so approval
+  // cannot partially apply and two concurrent approvals cannot double-void.
+  const result = await approveVoidRequestAtomic({
+    requestId,
+    approvedById: session.userId,
+    approvedByName: session.name,
+    newOrderId,
+    ticketNo,
   });
+  if (!result.ok) return { error: result.error };
 
   revalidatePath("/pos");
   revalidatePath("/admin");

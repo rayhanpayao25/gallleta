@@ -5,6 +5,7 @@ import type {
   MenuItem,
   OffRequest,
   Order,
+  OrderItem,
   PrintJob,
   Promotion,
   RecipeCosting,
@@ -12,6 +13,7 @@ import type {
   Role,
   StaffUser,
   StoreData,
+  VoidRequest,
 } from "@/lib/types";
 import { roundQty } from "@/lib/inventory";
 import { DEFAULT_MENU, MENU_CATEGORIES, normalizeMenuAddons, normalizeMenuStyles } from "@/lib/menu";
@@ -393,7 +395,7 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
   }
   const previousStore = memoryStore;
   const supabase = supabaseAdmin();
-  const [pos, users, categories, menu, promotions, inventory, orders, orderItems, usageLogs, restocks, costings, costingIngredients, recipes, recipeCostings, recipeCostingMenuItems, recipeCostingIngredients, loginActivity, offRequests] = await Promise.all([
+  const [pos, users, categories, menu, promotions, inventory, orders, orderItems, usageLogs, restocks, costings, costingIngredients, recipes, recipeCostings, recipeCostingMenuItems, recipeCostingIngredients, loginActivity, offRequests, voidRequests] = await Promise.all([
     supabase.from("pos_state").select("*").eq("id", POS_STATE_ID).maybeSingle(),
     supabase.from("staff_users").select("*").order("created_at"),
     supabase.from("menu_categories").select("*").order("name"),
@@ -412,8 +414,11 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
     supabase.from("recipe_costing_ingredients").select("*").order("created_at"),
     supabase.from("login_activity").select("*").order("at"),
     supabase.from("off_requests").select("*").order("created_at"),
+    // Newest first, matching the historical unshift() ordering the UI
+    // already expects for request lists.
+    supabase.from("void_requests").select("*").order("requested_at", { ascending: false }),
   ]);
-  const firstError = [pos, users, categories, menu, promotions, inventory, orders, orderItems, usageLogs, restocks, costings, costingIngredients, recipes, recipeCostings, recipeCostingMenuItems, recipeCostingIngredients, loginActivity, offRequests].find((result) => result.error)?.error;
+  const firstError = [pos, users, categories, menu, promotions, inventory, orders, orderItems, usageLogs, restocks, costings, costingIngredients, recipes, recipeCostings, recipeCostingMenuItems, recipeCostingIngredients, loginActivity, offRequests, voidRequests].find((result) => result.error)?.error;
   if (firstError) {
     const message = firstError.message;
     if (/JWT issued at future/i.test(message)) {
@@ -526,15 +531,15 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
       status: row.status,
       createdAt: row.created_at,
     })),
+    voidRequests: (voidRequests.data ?? []).map(voidRequestFromRow),
   });
   if (previousStore) {
     // These keys have no backing table - they only exist in this in-process
     // copy - so carry them across a refresh instead of dropping them every
-    // TTL window: pending print jobs, pending void requests, admin-set login
-    // gates, and per-item menu styles/addons (menu_items has no columns for
-    // those, so a fresh read always normalizes them back to defaults).
+    // TTL window: pending print jobs, admin-set login gates, and per-item
+    // menu styles/addons (menu_items has no columns for those, so a fresh
+    // read always normalizes them back to defaults).
     store.printJobs = previousStore.printJobs;
-    store.voidRequests = previousStore.voidRequests;
     store.loginGates = previousStore.loginGates;
     const previousMenuById = new Map(
       previousStore.menu.map((item) => [item.id, item]),
@@ -714,6 +719,12 @@ function withStore<T>(
 
 export function getStore(): Promise<StoreData> {
   return withStore((store) => store);
+}
+
+// Validation that must not run against a stale snapshot (e.g. checking
+// whether an order is already voided before inserting a related row).
+export function getFreshStore(): Promise<StoreData> {
+  return withStore((store) => store, { fresh: true });
 }
 
 export function updateStore(
@@ -1290,6 +1301,130 @@ export async function deleteOffRequestRecord(id: string): Promise<void> {
     if (error) throw new Error(`Unable to delete off request: ${error.message}`);
     if (memoryStore) {
       memoryStore.offRequests = memoryStore.offRequests.filter((item) => item.id !== id);
+    }
+  });
+}
+
+// void_requests ---------------------------------------------------------------
+//
+// Same targeted-write pattern as off_requests. Supabase is the durable
+// source of truth so the approval workflow is visible across server
+// instances; memoryStore only mirrors rows for TTL-window consistency.
+//
+// requested_by_id falls back to the row's own id when the staff account
+// was deleted (ON DELETE SET NULL), same rationale as offRequests.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function voidRequestFromRow(row: any): VoidRequest {
+  return {
+    id: row.id,
+    requestedAt: row.requested_at,
+    requestedById: row.requested_by_id ?? row.id,
+    requestedByName: row.requested_by_name,
+    reason: row.reason,
+    status: row.status,
+    orderId: row.order_id ?? undefined,
+    items: Array.isArray(row.items) ? (row.items as OrderItem[]) : [],
+    subtotal: Number(row.subtotal),
+    discount: Number(row.discount),
+    promoLabel: row.promo_label ?? undefined,
+    total: Number(row.total),
+    paymentMethod: parsePayment(row.payment_method),
+    approvedAt: row.approved_at ?? undefined,
+    approvedByName: row.approved_by_name ?? undefined,
+    processedOrderId: row.processed_order_id ?? undefined,
+  };
+}
+
+export async function insertVoidRequestRecord(entry: VoidRequest): Promise<void> {
+  await enqueue(async () => {
+    const supabase = supabaseAdmin();
+    const { error } = await supabase.from("void_requests").insert({
+      id: entry.id,
+      requested_at: entry.requestedAt,
+      requested_by_id: entry.requestedById,
+      requested_by_name: entry.requestedByName,
+      reason: entry.reason,
+      status: entry.status,
+      order_id: entry.orderId ?? null,
+      items: entry.items,
+      subtotal: entry.subtotal,
+      discount: entry.discount,
+      promo_label: entry.promoLabel ?? null,
+      total: entry.total,
+      payment_method: entry.paymentMethod,
+    });
+    if (error) throw new Error(`Unable to create void request: ${error.message}`);
+    if (memoryStore) {
+      if (!Array.isArray(memoryStore.voidRequests)) memoryStore.voidRequests = [];
+      if (!memoryStore.voidRequests.some((item) => item.id === entry.id)) {
+        memoryStore.voidRequests.unshift(entry);
+      }
+    }
+  });
+}
+
+// Direct row read for status polling and approval - deliberately bypasses
+// the 5s store cache so a cashier polling on one instance sees an approval
+// made on another instance immediately.
+export async function getVoidRequestRecord(id: string): Promise<VoidRequest | null> {
+  return enqueue(async () => {
+    const supabase = supabaseAdmin();
+    const { data, error } = await supabase
+      .from("void_requests")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+    if (error) throw new Error(`Unable to read void request: ${error.message}`);
+    return data ? voidRequestFromRow(data) : null;
+  });
+}
+
+// approve_void_request_atomic performs the request status update AND the
+// order effect (void existing order / create pre-voided order) in a single
+// DB transaction, so the approval cannot partially apply across instances.
+export async function approveVoidRequestAtomic(input: {
+  requestId: string;
+  approvedById: string;
+  approvedByName: string;
+  newOrderId?: string | null;
+  ticketNo?: string | null;
+}): Promise<{ ok: true; processedOrderId: string } | { ok: false; error: string }> {
+  return enqueue(async () => {
+    const supabase = supabaseAdmin();
+    const { data, error } = await supabase.rpc("approve_void_request_atomic", {
+      p_request_id: input.requestId,
+      p_approved_by_id: input.approvedById,
+      p_approved_by_name: input.approvedByName,
+      p_new_order_id: input.newOrderId ?? null,
+      p_ticket_no: input.ticketNo ?? null,
+    });
+    if (error) throw new Error(`Unable to approve void request: ${error.message}`);
+    if (!data?.ok) {
+      const code = data?.error;
+      return {
+        ok: false,
+        error:
+          code === "ALREADY_APPROVED"
+            ? "Void request is already approved."
+            : code === "ALREADY_VOIDED"
+              ? "Ticket is already voided."
+              : "Void request not found.",
+      };
+    }
+    // The RPC changed orders/inventory server-side; invalidate rather than
+    // recompute the same lookups locally (same approach as voidOrderAtomic).
+    invalidateStoreCache();
+    return { ok: true, processedOrderId: data.processedOrderId };
+  });
+}
+
+export async function deleteVoidRequestRecord(id: string): Promise<void> {
+  await enqueue(async () => {
+    const supabase = supabaseAdmin();
+    const { error } = await supabase.from("void_requests").delete().eq("id", id);
+    if (error) throw new Error(`Unable to delete void request: ${error.message}`);
+    if (memoryStore) {
+      memoryStore.voidRequests = memoryStore.voidRequests.filter((item) => item.id !== id);
     }
   });
 }
