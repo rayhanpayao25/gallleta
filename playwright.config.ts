@@ -5,6 +5,12 @@ import { defineConfig, devices } from "@playwright/test";
 // gets slowMo.
 const isHeaded = process.env.PW_HEADED === "1";
 
+// PORT is honored both by `next dev` (the webServer command) and here, so
+// PORT=3100 npx playwright test runs the suite on a different port when
+// localhost:3000 is already bound by another project.
+const port = process.env.PORT ?? "3000";
+const baseURL = `http://localhost:${port}`;
+
 export default defineConfig({
   testDir: "./tests",
   testMatch: /.*\.spec\.ts/,
@@ -17,7 +23,7 @@ export default defineConfig({
   reporter: [["list"], ["html", { open: "never" }]],
   timeout: 45_000,
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
@@ -31,7 +37,7 @@ export default defineConfig({
   ],
   webServer: {
     command: "npm run dev",
-    url: "http://localhost:3000",
+    url: baseURL,
     reuseExistingServer: true,
     timeout: 60_000,
   },

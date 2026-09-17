@@ -21,17 +21,23 @@ export const E2E_NAME_PREFIX = "E2E ";
 
 // --- direct Supabase client for DB-safe verification/cleanup -------------
 function loadEnv(): Record<string, string> {
-  const envPath = path.join(process.cwd(), ".env");
-  return Object.fromEntries(
-    fs
-      .readFileSync(envPath, "utf8")
-      .split("\n")
-      .filter((l) => l.includes("=") && !l.trim().startsWith("#"))
-      .map((l) => {
-        const i = l.indexOf("=");
-        return [l.slice(0, i).trim(), l.slice(i + 1).trim()];
-      }),
-  );
+  const readFile = (name: string): Record<string, string> => {
+    const envPath = path.join(process.cwd(), name);
+    if (!fs.existsSync(envPath)) return {};
+    return Object.fromEntries(
+      fs
+        .readFileSync(envPath, "utf8")
+        .split("\n")
+        .filter((l) => l.includes("=") && !l.trim().startsWith("#"))
+        .map((l) => {
+          const i = l.indexOf("=");
+          return [l.slice(0, i).trim(), l.slice(i + 1).trim()];
+        }),
+    );
+  };
+  // The app itself reads .env.local; .env is kept as a fallback for
+  // environments that use it instead.
+  return { ...readFile(".env"), ...readFile(".env.local") };
 }
 
 let cachedEnv: Record<string, string> | null = null;

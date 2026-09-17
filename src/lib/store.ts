@@ -24,6 +24,21 @@ const POS_STATE_ID = "commune-coffee";
 
 let queue: Promise<unknown> = Promise.resolve();
 let memoryStore: StoreData | null = null;
+let memoryStoreReadAt = 0;
+
+// memoryStore is a short-lived per-process read cache, not the source of
+// truth - Supabase is. A row written by another instance (another serverless
+// function, a second dev process, a direct DB edit) becomes visible to this
+// process once the cached snapshot is older than this TTL. AdminShell
+// re-renders every 5s, so 5s bounds cross-instance staleness to roughly one
+// refresh cycle while still deduping the bursts of reads a single page
+// render or action produces.
+export const STORE_CACHE_TTL_MS = 5_000;
+
+function invalidateStoreCache() {
+  memoryStore = null;
+  memoryStoreReadAt = 0;
+}
 
 
 function env(...names: string[]) {
@@ -368,8 +383,15 @@ export async function uploadPublicMenuPhoto(
   return data.publicUrl;
 }
 
-async function readStore(): Promise<StoreData> {
-  if (memoryStore) return memoryStore;
+async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
+  if (
+    !options?.fresh &&
+    memoryStore &&
+    Date.now() - memoryStoreReadAt < STORE_CACHE_TTL_MS
+  ) {
+    return memoryStore;
+  }
+  const previousStore = memoryStore;
   const supabase = supabaseAdmin();
   const [pos, users, categories, menu, promotions, inventory, orders, orderItems, usageLogs, restocks, costings, costingIngredients, recipes, recipeCostings, recipeCostingMenuItems, recipeCostingIngredients, loginActivity, offRequests] = await Promise.all([
     supabase.from("pos_state").select("*").eq("id", POS_STATE_ID).maybeSingle(),
@@ -505,7 +527,27 @@ async function readStore(): Promise<StoreData> {
       createdAt: row.created_at,
     })),
   });
+  if (previousStore) {
+    // These keys have no backing table - they only exist in this in-process
+    // copy - so carry them across a refresh instead of dropping them every
+    // TTL window: pending print jobs, pending void requests, admin-set login
+    // gates, and per-item menu styles/addons (menu_items has no columns for
+    // those, so a fresh read always normalizes them back to defaults).
+    store.printJobs = previousStore.printJobs;
+    store.voidRequests = previousStore.voidRequests;
+    store.loginGates = previousStore.loginGates;
+    const previousMenuById = new Map(
+      previousStore.menu.map((item) => [item.id, item]),
+    );
+    store.menu = store.menu.map((item) => {
+      const previous = previousMenuById.get(item.id);
+      return previous
+        ? { ...item, styles: previous.styles, addons: previous.addons }
+        : item;
+    });
+  }
   memoryStore = store;
+  memoryStoreReadAt = Date.now();
   return store;
 }
 
@@ -652,11 +694,15 @@ async function writeStore(store: StoreData): Promise<void> {
   const error = operations.find((result) => result.error)?.error;
   if (error) throw new Error(`Unable to save store data: ${error.message}`);
   memoryStore = store;
+  memoryStoreReadAt = Date.now();
 }
 
-function withStore<T>(fn: (store: StoreData) => Promise<T> | T): Promise<T> {
+function withStore<T>(
+  fn: (store: StoreData) => Promise<T> | T,
+  options?: { fresh?: boolean },
+): Promise<T> {
   const run = queue.then(async () => {
-    const store = await readStore();
+    const store = await readStore(options);
     return fn(store);
   });
   queue = run.then(
@@ -673,11 +719,14 @@ export function getStore(): Promise<StoreData> {
 export function updateStore(
   fn: (store: StoreData) => void,
 ): Promise<StoreData> {
+  // writeStore() upserts whole arrays back, so a mutation must always start
+  // from a fresh read - applying it to a cached snapshot could silently
+  // re-upsert a row another instance deleted within the TTL window.
   return withStore(async (store) => {
     fn(store);
     await writeStore(store);
     return store;
-  });
+  }, { fresh: true });
 }
 
 function enqueue<T>(fn: () => Promise<T>): Promise<T> {
@@ -847,7 +896,7 @@ export async function voidOrderAtomic(
     }
     // Inventory restoration amounts are server-computed from usage_logs;
     // invalidate rather than recompute the same lookup a second time here.
-    memoryStore = null;
+    invalidateStoreCache();
     return { ok: true };
   });
 }
@@ -857,7 +906,7 @@ export async function deleteOrderAtomic(orderId: string): Promise<void> {
     const supabase = supabaseAdmin();
     const { error } = await supabase.rpc("delete_order_atomic", { p_order_id: orderId });
     if (error) throw new Error(`Unable to delete order: ${error.message}`);
-    memoryStore = null;
+    invalidateStoreCache();
   });
 }
 
@@ -878,7 +927,7 @@ export async function createRestockAtomic(input: {
       p_created_at: input.createdAt,
     });
     if (error) throw new Error(`Unable to create restock: ${error.message}`);
-    memoryStore = null;
+    invalidateStoreCache();
   });
 }
 
@@ -903,7 +952,7 @@ export async function editRestockAtomic(input: {
       p_new_created_at: input.newCreatedAt,
     });
     if (error) throw new Error(`Unable to edit restock: ${error.message}`);
-    memoryStore = null;
+    invalidateStoreCache();
   });
 }
 
@@ -920,7 +969,7 @@ export async function deleteRestockAtomic(input: {
       p_quantity_added: input.quantityAdded,
     });
     if (error) throw new Error(`Unable to delete restock: ${error.message}`);
-    memoryStore = null;
+    invalidateStoreCache();
   });
 }
 
@@ -959,7 +1008,7 @@ export async function renameMenuCategoryAtomic(
         error: data?.error === "CATEGORY_EXISTS" ? "That category is already on the board." : "Category not found.",
       };
     }
-    memoryStore = null;
+    invalidateStoreCache();
     return { ok: true };
   });
 }
