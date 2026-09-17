@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/auth";
-import { isDrinkCategory, nextTicketNo } from "@/lib/escpos";
+import { isDrinkCategory } from "@/lib/escpos";
 import { orderLineOptionsLabel, pricedOrderLine } from "@/lib/menu";
 import { parsePayment } from "@/lib/payments";
 import { ingredientsForOrderLine, roundQty } from "@/lib/inventory";
@@ -341,7 +341,8 @@ export async function createOrder(
     return { ok: false as const, error: "Cash tendered is short." };
   }
 
-  const ticketNo = nextTicketNo(store.orders);
+  // The ticket number is allocated inside create_order_atomic on a per-PH-day
+  // DB counter, not from this (possibly stale) cached order list.
   const orderId = `ord-${Date.now()}`;
   const createdAt = new Date().toISOString();
 
@@ -382,7 +383,6 @@ export async function createOrder(
     promoLabel,
     total,
     paymentMethod: method,
-    ticketNo,
     paid: cashIn,
     change: method === "cash" ? cashIn - total : 0,
     voided: false,
@@ -392,6 +392,8 @@ export async function createOrder(
   if (!result.ok) {
     return { ok: false as const, error: result.error };
   }
+  const ticketNo = result.ticketNo;
+  createdOrder.ticketNo = ticketNo;
 
   const createdPrintJobs = initialPrintJobs(createdOrder, store.menu);
   await appendPrintJobs(createdPrintJobs);
@@ -421,7 +423,7 @@ export async function verifyManager(username: string, password: string) {
   if (!user) {
     return { error: "Manager credentials required to void." };
   }
-  return { ok: true, name: user.name };
+  return { ok: true, name: user.name, id: user.id };
 }
 
 export async function voidOrder(
@@ -435,14 +437,21 @@ export async function voidOrder(
     return { error: "Enter a reason for voiding." };
   }
 
+  // orders.voided_by is an FK to staff_users.id, so the actual manager id is
+  // recorded - the session's own id for a manager void, or the id of the
+  // manager whose credentials authorized a cashier's void.
+  let voidedBy: string | null = null;
   if (session.role === "cashier") {
     const auth = await verifyManager(managerUsername ?? "", managerPassword ?? "");
     if ("error" in auth) return auth;
-  } else if (session.role !== "manager") {
+    voidedBy = auth.id;
+  } else if (session.role === "manager") {
+    voidedBy = session.userId;
+  } else {
     return { error: "Only a manager can void a transaction." };
   }
 
-  const result = await voidOrderAtomic(orderId, reason.trim(), null);
+  const result = await voidOrderAtomic(orderId, reason.trim(), voidedBy);
   if (!result.ok) return { error: result.error };
 
   revalidatePath("/pos");
@@ -604,13 +613,12 @@ export async function approveVoidRequest(requestId: string) {
     return { error: "Void request is already approved." };
   }
 
-  // For a pre-checkout request the RPC needs the id/ticket number of the
-  // already-voided order it will create; ticket numbering is display-only
-  // so a cached order list is fine here.
+  // For a pre-checkout request the RPC needs the id of the already-voided
+  // order it will create; the ticket number is allocated inside the RPC on
+  // the per-PH-day counter at approval time (not reserved at request time).
   const newOrderId = request.orderId
     ? null
     : `ord-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-  const ticketNo = request.orderId ? null : nextTicketNo((await getStore()).orders);
 
   // approve_void_request_atomic performs the request status update AND the
   // order effect in one DB transaction (void_order_atomic for an existing
@@ -621,7 +629,6 @@ export async function approveVoidRequest(requestId: string) {
     approvedById: session.userId,
     approvedByName: session.name,
     newOrderId,
-    ticketNo,
   });
   if (!result.ok) return { error: result.error };
 
@@ -649,63 +656,62 @@ export async function voidCheckout(
   const auth = await verifyManager(managerUsername, managerPassword);
   if ("error" in auth) return auth;
 
-  let error: string | undefined;
-  let createdId = "";
-
-  await updateStore((store) => {
-    const priced: OrderItem[] = [];
-    for (const line of cart) {
-      const menuItem = store.menu.find((item) => item.id === line.productId);
-      const qty = Number(line.qty);
-      if (!menuItem) {
-        error = "One of the items is no longer on the menu.";
-        return;
-      }
-      if (!Number.isSafeInteger(qty) || qty < 1 || qty > 99) {
-        error = "Each item quantity must be a whole number from 1 to 99.";
-        return;
-      }
-      priced.push(pricedOrderLine(menuItem, { ...line, qty }));
+  const store = await getStore();
+  const priced: OrderItem[] = [];
+  for (const line of cart) {
+    const menuItem = store.menu.find((item) => item.id === line.productId);
+    const qty = Number(line.qty);
+    if (!menuItem) {
+      return { error: "One of the items is no longer on the menu." };
     }
-
-    const subtotal = priced.reduce((sum, item) => sum + item.price * item.qty, 0);
-    let discount = 0;
-    let promoLabel: string | undefined;
-    if (promoId) {
-      const found = store.promotions.find((entry) => entry.id === promoId && entry.active);
-      if (found) {
-        promoLabel = found.label;
-        discount =
-          found.type === "percent"
-            ? Math.round((subtotal * found.value) / 100)
-            : Math.min(subtotal, Math.round(found.value));
-      }
+    if (!Number.isSafeInteger(qty) || qty < 1 || qty > 99) {
+      return { error: "Each item quantity must be a whole number from 1 to 99." };
     }
-    const total = Math.max(0, subtotal - discount);
-    const orderId = `ord-${Date.now()}`;
-    createdId = orderId;
-    store.orders.push({
-      id: orderId,
-      createdAt: new Date().toISOString(),
-      baristaName: session.name,
-      items: priced,
-      subtotal,
-      discount,
-      promoLabel,
-      total,
-      paymentMethod: parsePayment(paymentMethod),
-      ticketNo: nextTicketNo(store.orders),
-      paid: 0,
-      change: 0,
-      voided: true,
-      voidReason: reason.trim(),
-    });
-  });
+    priced.push(pricedOrderLine(menuItem, { ...line, qty }));
+  }
 
-  if (error) return { error };
+  const subtotal = priced.reduce((sum, item) => sum + item.price * item.qty, 0);
+  let discount = 0;
+  let promoLabel: string | undefined;
+  if (promoId) {
+    const found = store.promotions.find((entry) => entry.id === promoId && entry.active);
+    if (found) {
+      promoLabel = found.label;
+      discount =
+        found.type === "percent"
+          ? Math.round((subtotal * found.value) / 100)
+          : Math.min(subtotal, Math.round(found.value));
+    }
+  }
+  const total = Math.max(0, subtotal - discount);
+
+  // create_order_atomic writes the already-voided order + items atomically:
+  // it allocates the ticket on the DB counter, sets voided_at = now(), and
+  // records the approving manager's staff_users.id in voided_by. No
+  // deductions - a pre-checkout void never touched inventory.
+  const orderId = `ord-${Date.now()}`;
+  const createdOrder: Order = {
+    id: orderId,
+    createdAt: new Date().toISOString(),
+    baristaName: session.name,
+    items: priced,
+    subtotal,
+    discount,
+    promoLabel,
+    total,
+    paymentMethod: parsePayment(paymentMethod),
+    paid: 0,
+    change: 0,
+    voided: true,
+    voidReason: reason.trim(),
+  };
+
+  const result = await createOrderAtomic({ order: createdOrder, deductions: [], voidedBy: auth.id });
+  if (!result.ok) return { error: result.error };
+
   revalidatePath("/pos");
   revalidatePath("/admin");
-  return { ok: true, id: createdId };
+  return { ok: true, id: orderId };
 }
 
 export async function beginPrintJob(jobId: string) {

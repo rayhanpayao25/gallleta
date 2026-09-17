@@ -821,11 +821,12 @@ export async function appendPrintJobs(jobs: PrintJob[]): Promise<void> {
 export async function createOrderAtomic(input: {
   order: Order;
   deductions: { inventoryItemId: string; itemName: string; amount: number; unit: string; orderItemId?: string }[];
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+  voidedBy?: string | null;
+}): Promise<{ ok: true; ticketNo: string } | { ok: false; error: string }> {
   return enqueue(async () => {
     const supabase = supabaseAdmin();
     const { order, deductions } = input;
-    const { error } = await supabase.rpc("create_order_atomic", {
+    const { data, error } = await supabase.rpc("create_order_atomic", {
       p_order_id: order.id,
       p_created_at: order.createdAt,
       p_barista_name: order.baristaName,
@@ -837,18 +838,22 @@ export async function createOrderAtomic(input: {
       p_promo_label: order.promoLabel ?? null,
       p_total: order.total,
       p_payment_method: order.paymentMethod ?? "cash",
-      p_ticket_no: order.ticketNo ?? "",
+      // The RPC allocates the ticket number itself on a per-PH-day counter;
+      // p_ticket_no is ignored. The assigned number comes back in the result.
+      p_ticket_no: null,
       p_paid: order.paid ?? order.total,
       p_change: order.change ?? 0,
       p_deductions: deductions,
       p_voided: order.voided ?? false,
       p_void_reason: order.voidReason ?? null,
+      p_voided_by: input.voidedBy ?? null,
     });
     if (error) {
       const insufficient = /INSUFFICIENT_STOCK:(.+)/.exec(error.message);
       if (insufficient) return { ok: false, error: `Not enough ${insufficient[1]} in stock.` };
       throw new Error(`Unable to create order: ${error.message}`);
     }
+    if (data?.ticketNo) order.ticketNo = data.ticketNo;
     if (memoryStore) {
       memoryStore.orders.push(order);
       for (const deduction of deductions) {
@@ -869,7 +874,7 @@ export async function createOrderAtomic(input: {
       }
       memoryStore.usageLogs = now;
     }
-    return { ok: true };
+    return { ok: true, ticketNo: data?.ticketNo ?? "" };
   });
 }
 
@@ -1387,7 +1392,6 @@ export async function approveVoidRequestAtomic(input: {
   approvedById: string;
   approvedByName: string;
   newOrderId?: string | null;
-  ticketNo?: string | null;
 }): Promise<{ ok: true; processedOrderId: string } | { ok: false; error: string }> {
   return enqueue(async () => {
     const supabase = supabaseAdmin();
@@ -1396,7 +1400,8 @@ export async function approveVoidRequestAtomic(input: {
       p_approved_by_id: input.approvedById,
       p_approved_by_name: input.approvedByName,
       p_new_order_id: input.newOrderId ?? null,
-      p_ticket_no: input.ticketNo ?? null,
+      // p_ticket_no is omitted: the RPC allocates the ticket itself for a
+      // pre-checkout approval, in the same transaction as the order insert.
     });
     if (error) throw new Error(`Unable to approve void request: ${error.message}`);
     if (!data?.ok) {

@@ -219,7 +219,10 @@ test.describe("void request persistence", () => {
       expect(order.void_reason).toBe("e2e void request persistence");
       expect(order.voided_at).toBeTruthy();
       expect(order.barista_name).toBe("E2E Requester");
-      expect(order.ticket_no).toBe("E2E-PRE");
+      // p_ticket_no is no longer authoritative: the approve RPC allocates the
+      // ticket on the DB counter inside the same transaction.
+      expect(order.ticket_no).toMatch(/^\d{3}$/);
+      expect(order.ticket_no).not.toBe("E2E-PRE");
 
       const lines = await supabase.from("order_items").select("*").eq("order_id", newOrderId);
       expect(lines.data ?? []).toHaveLength(1);
