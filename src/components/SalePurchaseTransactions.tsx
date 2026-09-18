@@ -1242,7 +1242,7 @@ export function SalePurchaseTransactions({
                       ) : null}
                       <div className="mt-4 border-t border-neutral-100 pt-3">
                         {filteredUnassignedMenuItems.length > 0 || menuItems.some((item) => costing.menuItems.includes(item.name)) ? (
-                          <div className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
+                          <div className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-1">
                             {menuItems
                               .filter((item) => {
                                 const query = drinkSearch.trim().toLowerCase();
@@ -1269,7 +1269,7 @@ export function SalePurchaseTransactions({
                                       onChange={() => toggleCostingMenuItem(costingIndex, item.name)}
                                       className="h-4 w-4 shrink-0 accent-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
                                     />
-                                    <span className="truncate">{item.name}</span>
+                                    <span className="min-w-0 break-words leading-snug" title={item.name}>{item.name}</span>
                                   </label>
                                 );
                               })}
