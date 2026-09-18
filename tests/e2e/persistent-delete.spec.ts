@@ -41,13 +41,18 @@ test("restock: create, delete via UI, reload, stays gone", async ({ page }) => {
   await openAdminPanel(page, "Inventory");
   await page.click('button:has-text("Stock Inventory")');
   await page.waitForSelector("text=Add Stock Item", { timeout: 10000 });
-  await page.click('button:has-text("Restock")');
-  await page.waitForSelector("text=Add Restock Record", { timeout: 10000 });
 
-  await page.fill('input[placeholder="e.g. Coffee Beans"]', realItem.name);
-  await page.fill('form input[placeholder="0"]', "1");
-  await page.click('button[type="submit"]:has-text("Add")');
+  // Restock creation lives on the Stock Inventory tab: the row's inline
+  // +Qty input (entered in pieces) + Add button -> create_restock_atomic.
+  const stockRow = page.locator("tr", { hasText: realItem.name }).first();
+  await stockRow.locator('input[placeholder="+Qty"]').fill("1");
+  await stockRow.locator('button:has-text("Add")').click();
   await page.waitForTimeout(1200);
+
+  // The restock row appears on the Restock tab (history table only - the
+  // separate Add Restock Record form was removed).
+  await page.click('button:has-text("Restock")');
+  await page.waitForSelector("text=Added Qty", { timeout: 10000 });
 
   const created = await pollUntil(async () => {
     const rows = await supabase.from("restocks").select("id, created_at").eq("item_name_snapshot", realItem.name).order("created_at", { ascending: false }).limit(1);

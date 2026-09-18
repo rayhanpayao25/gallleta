@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { createRestock, deleteAdminRecord, deleteRestock, editRestock, saveAdminData } from "@/actions/pos";
+import { createRestock, deleteAdminRecord, deleteRestock, saveAdminData } from "@/actions/pos";
 import { costingIngredientForItem, cupsFromQuantity, formatQty, ingredientsForOrderLine, namesMatch, perCupAmount, remainingForUsages, roundQty, stockLedgerForRange } from "@/lib/inventory";
 import { phDateString, phDateTimeLabel, phIsoFromDate, phNowDateTime, phPeriodBounds, type PeriodRange } from "@/lib/datetime";
 import { isFoodOrPastry, orderSoldAsLabel, orderSoldAsLines } from "@/lib/menu";
@@ -366,11 +366,6 @@ export function SalePurchaseTransactions({
     setStockPurchaseUnitSize("");
     setStockCupUsageAmount("");
   }
-
-  const [editRestockId, setEditRestockId] = useState<string | null>(null);
-  const [restockItem, setRestockItem] = useState("");
-  const [restockQty, setRestockQty] = useState("");
-  const [restockDate, setRestockDate] = useState(getTodayDate());
 
   const [editCostingId, setEditCostingId] = useState<string | null>(null);
   const [costingProduct, setCostingProduct] = useState("");
@@ -917,82 +912,6 @@ export function SalePurchaseTransactions({
     await createRestock({ id: newRestockId, inventoryItemId: item.id, itemNameSnapshot: item.name, quantityAdded: addQty, createdAt: nowTime });
 
     setInlineRestockValues({ ...inlineRestockValues, [item.id]: "" });
-  };
-
-  const handleSaveRestock = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!restockItem || !restockQty) return;
-  const pieces = Number(restockQty);
-  const restockStockItem = stocks.find((item) => namesMatch(item.name, restockItem));
-  const qty = restockStockItem ? toBaseQuantity(restockStockItem, pieces) : pieces;
-  const saveDate = editRestockId
-      ? (restocks.find((record) => record.id === editRestockId)?.date ?? restockDate)
-      : filterMode === "date"
-        ? filterDate
-        : getTodayDate();
-    const stamp =
-      phDateString(saveDate) === getTodayDate()
-        ? getNowDateTime()
-        : `${phDateString(saveDate)} 12:00:00`;
-
-    if (editRestockId) {
-      const previous = restocks.find((record) => record.id === editRestockId);
-      const previousStockItem = previous ? stocks.find((item) => namesMatch(item.name, previous.itemName)) : undefined;
-      const nextRestocks = restocks.map((r) =>
-        r.id === editRestockId ? { ...r, itemName: restockItem, quantityAdded: qty, date: stamp } : r,
-      );
-      let nextStocks = stocks;
-      if (previous) {
-        nextStocks = stocks.map((item) => {
-          let stock = item.stock;
-          if (namesMatch(item.name, previous.itemName)) {
-            stock = Math.max(0, stock - previous.quantityAdded);
-          }
-          if (namesMatch(item.name, restockItem)) {
-            stock += qty;
-          }
-          return { ...item, stock };
-        });
-      }
-      setStocks(nextStocks);
-      setRestocks(nextRestocks);
-      // Revert-old + apply-new + ledger update happen in one DB transaction
-      // (edit_restock_atomic).
-      await editRestock({
-        id: editRestockId,
-        oldInventoryItemId: previousStockItem?.id ?? null,
-        oldQuantity: previous?.quantityAdded ?? 0,
-        newInventoryItemId: restockStockItem?.id ?? null,
-        newItemNameSnapshot: restockItem,
-        newQuantity: qty,
-        newCreatedAt: stamp,
-      });
-      setEditRestockId(null);
-    } else {
-      const newRestockId = Date.now().toString();
-      const newRestock: RestockRecord = { id: newRestockId, itemName: restockItem, quantityAdded: qty, date: stamp };
-      const nextRestocks = [newRestock, ...restocks];
-      const nextStocks = stocks.map((s) =>
-        namesMatch(s.name, restockItem) ? { ...s, stock: s.stock + qty } : s,
-      );
-      setStocks(nextStocks);
-      setRestocks(nextRestocks);
-      await createRestock({
-        id: newRestockId,
-        inventoryItemId: restockStockItem?.id ?? null,
-        itemNameSnapshot: restockItem,
-        quantityAdded: qty,
-        createdAt: stamp,
-      });
-    }
-    setRestockItem(""); setRestockQty(""); setRestockDate(getTodayDate());
-  };
-
-  const handleEditRestock = (r: RestockRecord) => {
-    setEditRestockId(r.id);
-    setRestockItem(r.itemName);
-    setRestockQty(r.quantityAdded.toString());
-    setRestockDate(phDateString(r.date));
   };
 
   const handleDeleteRestock = async (id: string) => {
@@ -1695,24 +1614,6 @@ export function SalePurchaseTransactions({
 
       {activeTab === "restock" && (
         <div className="space-y-6">
-          <div className="bg-neutral-50 p-4 rounded-lg border border-neutral-400 space-y-4">
-            <h3 className="text-xs font-bold text-neutral-700 uppercase">{editRestockId ? "Edit Restock Record" : "Add Restock Record"}</h3>
-            <form onSubmit={handleSaveRestock} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 items-end">
-              <div>
-                <label className="block text-xs font-medium text-neutral-600 mb-1">Item Name</label>
-                <input type="text" placeholder="e.g. Coffee Beans" value={restockItem} onChange={(e) => setRestockItem(e.target.value)} className="w-full bg-white border border-neutral-400 rounded px-3 py-1.5 text-sm" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-neutral-600 mb-1">Quantity Added</label>
-                <input type="number" placeholder="0" value={restockQty} onChange={(e) => setRestockQty(e.target.value)} className="w-full bg-white border border-neutral-400 rounded px-3 py-1.5 text-sm" />
-              </div>
-              <div className="flex gap-2">
-                <button type="submit" className="flex-1 bg-black text-white px-3 py-1.5 rounded text-sm font-medium">{editRestockId ? "Update" : "Add"}</button>
-                <button type="button" onClick={() => { setEditRestockId(null); setRestockItem(""); setRestockQty(""); setRestockDate(getTodayDate()); }} className="border border-neutral-300 bg-white text-black hover:bg-neutral-100 px-3 py-1.5 rounded text-sm font-medium">Clear</button>
-              </div>
-            </form>
-          </div>
-
           <div className="overflow-x-auto rounded-lg border border-neutral-400 bg-white">
             <table className="w-full min-w-[640px] text-left text-sm">
               <thead>
@@ -1734,15 +1635,18 @@ export function SalePurchaseTransactions({
                   <tr key={r.id} className="border-b border-neutral-200 text-xs">
                     <td className="p-3 border-r border-neutral-200 text-neutral-600 font-medium">{r.date}</td>
                     <td className="p-3 border-r border-neutral-200 font-medium">{r.itemName}</td>
-                    <td className="p-3 border-r border-neutral-200 text-right font-bold text-black">+{r.quantityAdded}</td>
-                    <td className="p-3 border-r border-neutral-200 text-neutral-600">
-                      {stocks.find((item) => namesMatch(item.name, r.itemName))?.unit || ""}
+                    <td className="p-3 border-r border-neutral-200 text-right font-bold text-black">
+                      {/* quantity_added is stored in the item's base unit
+                          (ml/g/pcs); restock history shows the purchased piece
+                          count, so convert back via purchaseUnitSize (defaults
+                          to 1 when unset - right for pcs items and for rows
+                          whose item no longer exists). */}
+                      +{formatQty(toPieceQuantity(stocks.find((item) => namesMatch(item.name, r.itemName)) ?? {}, r.quantityAdded))}
                     </td>
+                    <td className="p-3 border-r border-neutral-200 text-neutral-600">pcs</td>
                     <td className="p-3 text-center">
                       <RowActions
-                        editLabel={`Edit restock ${r.itemName}`}
                         deleteLabel={`Delete restock ${r.itemName}`}
-                        onEdit={() => handleEditRestock(r)}
                         onDelete={() => void handleDeleteRestock(r.id)}
                       />
                     </td>

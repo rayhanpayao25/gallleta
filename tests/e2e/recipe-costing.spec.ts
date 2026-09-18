@@ -14,7 +14,9 @@ test("Recipe Costing: create, reload persists, edit, reload persists, delete, re
   const editingSection = page.locator('section:has(input[placeholder="Recipe name"])');
   await editingSection.locator('input[placeholder="Recipe name"]').fill(recipeName);
 
-  const firstMenuCheckbox = editingSection.locator('label:has(input[type="checkbox"])').first();
+  // A menu item already claimed by another recipe costing renders a disabled
+  // checkbox; pick the first one that is actually assignable.
+  const firstMenuCheckbox = editingSection.locator('label:has(input[type="checkbox"]:not([disabled]))').first();
   await firstMenuCheckbox.locator('input[type="checkbox"]').check();
 
   const ingredientSelect = editingSection.locator('select:has(option:has-text("Select ingredient"))').first();
