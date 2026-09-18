@@ -110,6 +110,26 @@ export function stripMenuImage(image: string) {
   return (index >= 0 ? value.slice(0, index) : value) || "/images/logo.jpg";
 }
 
+// Read-side fallback for legacy "#cc-opt=<base64url JSON>" marker rows that
+// predate the menu_items.styles/addons columns (the migration decodes all of
+// them, but this keeps any straggler readable). Never used on the write path.
+export function parseMenuImageOptions(image: string): { styles: DrinkStyle[]; addons: MenuAddon[] } {
+  const value = String(image ?? "");
+  const index = value.indexOf(MENU_IMAGE_OPTIONS_MARK);
+  if (index < 0) return { styles: [], addons: [] };
+  try {
+    const payload = value.slice(index + MENU_IMAGE_OPTIONS_MARK.length);
+    const b64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const parsed = JSON.parse(atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4)));
+    const styles = Array.isArray(parsed?.styles)
+      ? parsed.styles.flatMap((style: unknown) => (style === "hot" || style === "iced" ? [style] : []))
+      : [];
+    return { styles, addons: normalizeMenuAddons({ addons: parsed?.addons }) };
+  } catch {
+    return { styles: [], addons: [] };
+  }
+}
+
 export function addonAllowsQty(addon: Pick<MenuAddon, "name" | "qtyEnabled">) {
   return /espresso|shot/i.test(addon.name);
 }

@@ -16,7 +16,7 @@ import type {
   VoidRequest,
 } from "@/lib/types";
 import { roundQty } from "@/lib/inventory";
-import { DEFAULT_MENU, MENU_CATEGORIES, hydrateOrderLine, normalizeMenuAddons, normalizeMenuStyles, parseDrinkStyle, parseStoredOrderAddons } from "@/lib/menu";
+import { DEFAULT_MENU, MENU_CATEGORIES, hydrateOrderLine, normalizeMenuAddons, normalizeMenuStyles, parseDrinkStyle, parseMenuImageOptions, parseStoredOrderAddons, stripMenuImage } from "@/lib/menu";
 import { parsePayment } from "@/lib/payments";
 import { DEFAULT_LOGIN_GATES, normalizeLoginGates } from "@/lib/staff-gates";
 import { DEFAULT_PROMOS } from "@/lib/promos";
@@ -459,7 +459,27 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
       ).values(),
     ),
     categories: (categories.data ?? []).map((row) => row.name),
-    menu: (menu.data ?? []).map((row) => ({ id: row.id, name: row.name, price: row.price, category: (categories.data ?? []).find((category) => category.id === row.category_id)?.name ?? "Other", image: row.image, available: row.available })),
+    // styles/addons come from the real menu_items columns; the legacy
+    // "#cc-opt=" image-marker payload is only a fallback for rows written
+    // before those columns existed (and is stripped from the image either way).
+    menu: (menu.data ?? []).map((row) => {
+      const category = (categories.data ?? []).find((entry) => entry.id === row.category_id)?.name ?? "Other";
+      const legacy = parseMenuImageOptions(row.image);
+      const storedStyles = Array.isArray(row.styles)
+        ? row.styles.flatMap((style: unknown) => (style === "hot" || style === "iced" ? [style] : []))
+        : [];
+      const storedAddons = Array.isArray(row.addons) ? row.addons : [];
+      return {
+        id: row.id,
+        name: row.name,
+        price: row.price,
+        category,
+        image: stripMenuImage(row.image),
+        available: row.available,
+        styles: normalizeMenuStyles({ category, styles: storedStyles.length > 0 ? storedStyles : legacy.styles }),
+        addons: normalizeMenuAddons({ addons: storedAddons.length > 0 ? storedAddons : legacy.addons }),
+      };
+    }),
     promotions: (promotions.data ?? []).map((row) => ({ id: row.id, label: row.label, type: row.type, value: row.value, active: row.active })),
     inventory: (inventory.data ?? []).map((row) => ({
       id: row.id,
@@ -558,20 +578,11 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
   if (previousStore) {
     // These keys have no backing table - they only exist in this in-process
     // copy - so carry them across a refresh instead of dropping them every
-    // TTL window: pending print jobs, admin-set login gates, and per-item
-    // menu styles/addons (menu_items has no columns for those, so a fresh
-    // read always normalizes them back to defaults).
+    // TTL window: pending print jobs and admin-set login gates. (Menu
+    // styles/addons are real menu_items columns now and re-read like any
+    // other persisted field.)
     store.printJobs = previousStore.printJobs;
     store.loginGates = previousStore.loginGates;
-    const previousMenuById = new Map(
-      previousStore.menu.map((item) => [item.id, item]),
-    );
-    store.menu = store.menu.map((item) => {
-      const previous = previousMenuById.get(item.id);
-      return previous
-        ? { ...item, styles: previous.styles, addons: previous.addons }
-        : item;
-    });
   }
   memoryStore = store;
   memoryStoreReadAt = Date.now();
@@ -686,6 +697,11 @@ async function writeStore(store: StoreData): Promise<void> {
     throw new Error(`Unable to save orders: ${ordersError.message}`);
   }
 
+  // menu_item_id is a live-lookup convenience with an FK: it must be null
+  // when the line's productId is not a current menu_items.id (deleted menu
+  // items, manual/synthetic lines) - same rule create_order_atomic uses -
+  // otherwise the upsert violates the FK and fails the entire save.
+  const menuIds = new Set(store.menu.map((menuItem) => menuItem.id));
   const operations = await Promise.all([
     supabase.from("pos_state").upsert({ id: POS_STATE_ID, is_open: store.pos.isOpen, opened_at: store.pos.openedAt, opened_by_name: store.pos.openedBy, updated_at: new Date().toISOString() }),
     supabase.from("staff_users").upsert(
@@ -700,7 +716,7 @@ async function writeStore(store: StoreData): Promise<void> {
       { onConflict: "id" },
     ),
     supabase.from("menu_categories").insert(categoriesToWrite),
-    supabase.from("menu_items").upsert(store.menu.map((item) => ({ id: item.id, name: item.name, price: Math.round(item.price), category_id: categoryId.get(item.category.toLowerCase()) ?? "other", image: item.image, available: item.available })), { onConflict: "id" }),
+    supabase.from("menu_items").upsert(store.menu.map((item) => ({ id: item.id, name: item.name, price: Math.round(item.price), category_id: categoryId.get(item.category.toLowerCase()) ?? "other", image: stripMenuImage(item.image), available: item.available, styles: normalizeMenuStyles(item), addons: normalizeMenuAddons(item) })), { onConflict: "id" }),
     supabase.from("promotions").upsert(store.promotions.map((promo) => ({ id: promo.id, label: promo.label, type: promo.type, value: Math.round(promo.value), active: promo.active })), { onConflict: "id" }),
     supabase.from("inventory_items").upsert(store.inventory.map((item) => ({
       id: item.id,
@@ -714,7 +730,7 @@ async function writeStore(store: StoreData): Promise<void> {
       cup_usage_amount: item.cupUsageAmount ?? null,
       cups_make: item.cupsMake ?? null,
     })), { onConflict: "id" }),
-    supabase.from("order_items").upsert(store.orders.flatMap((order) => order.items.map((item, index) => ({ id: `${order.id}-item-${index + 1}`, order_id: order.id, menu_item_id: item.productId, product_id_snapshot: item.productId, name_snapshot: item.name, qty: item.qty, price_snapshot: item.price }))), { onConflict: "id" }),
+    supabase.from("order_items").upsert(store.orders.flatMap((order) => order.items.map((item, index) => ({ id: `${order.id}-item-${index + 1}`, order_id: order.id, menu_item_id: menuIds.has(item.productId) ? item.productId : null, product_id_snapshot: item.productId, name_snapshot: item.name, qty: item.qty, price_snapshot: item.price, style: item.style ?? null, addons: item.addons ?? [] }))), { onConflict: "id" }),
     supabase.from("usage_logs").upsert(store.usageLogs.map((log) => ({ id: log.id, order_id: log.orderId || null, order_item_id: log.orderItemId || null, item_name_snapshot: log.itemName, used_amount: log.usedAmount, unit: log.unit })), { onConflict: "id" }),
     supabase.from("restocks").upsert(store.restocks.map((record) => ({ id: record.id, item_name_snapshot: record.itemName, quantity_added: record.quantityAdded })), { onConflict: "id" }),
   ]);
