@@ -36,7 +36,11 @@ export const metadata: Metadata = {
   description: `${CAFE.tagline} ${CAFE.street}, ${CAFE.city}. Open ${CAFE.hours} ${CAFE.hoursNote}.`,
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <html
       lang="en"

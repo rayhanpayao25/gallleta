@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useTransition } from "react";
 import { approveVoidRequest } from "@/actions/pos";
-import { formatMoney, orderLineListLabel } from "@/lib/menu";
+import { drinkDisplayName, formatMoney, orderLineListLabel, orderLineOptionsLabel } from "@/lib/menu";
 import { phDateTimeLabel } from "@/lib/datetime";
 import { paymentLabel } from "@/lib/payments";
 import { ingredientsForOrderLine } from "@/lib/inventory";
@@ -1111,7 +1111,12 @@ export function AdminDashboard({ store }: { store: StoreData }) {
                   <ul className="min-w-0 list-disc space-y-1 pl-4 text-xs leading-relaxed text-neutral-600 lg:text-sm">
                     {order.items.map((item, itemIdx) => (
                       <li key={`${order.id}-${item.productId}-${itemIdx}`} className="break-words">
-                        {item.qty}× {orderLineListLabel(item)}
+                        <p>
+                          {item.qty}× {drinkDisplayName(item)}
+                        </p>
+                        {orderLineOptionsLabel(item) ? (
+                          <p className="text-[11px] text-neutral-500">{orderLineOptionsLabel(item)}</p>
+                        ) : null}
                       </li>
                     ))}
                   </ul>

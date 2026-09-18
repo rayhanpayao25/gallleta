@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/auth";
-import { addonIdFromName, isFoodOrPastry, menuItemId, normalizeMenuAddons, normalizeMenuStyles } from "@/lib/menu";
+import { addonIdFromName, isFoodOrPastry, menuItemId, normalizeMenuAddons, normalizeMenuStyles, stripMenuImage } from "@/lib/menu";
 import type { DrinkStyle, MenuAddon } from "@/lib/types";
 import {
   deleteMenuCategoryRecord,
@@ -37,10 +37,13 @@ function refresh() {
 }
 
 function isSafeImage(src: string) {
+  // Strip legacy "#cc-opt=" option markers (written by another branch) before
+  // validating the path so existing rows still pass.
+  const path = stripMenuImage(src);
   return (
-    src.startsWith("/images/") ||
-    src.startsWith("/uploads/menu/") ||
-    src.includes(".supabase.co/storage/")
+    path.startsWith("/images/") ||
+    path.startsWith("/uploads/menu/") ||
+    path.includes(".supabase.co/storage/")
   );
 }
 

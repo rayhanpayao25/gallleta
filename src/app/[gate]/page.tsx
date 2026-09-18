@@ -6,7 +6,11 @@ import { roleForLoginGate } from "@/lib/staff-gates";
 
 export const dynamic = "force-dynamic";
 
-export default async function GatePage({ params }: PageProps<"/[gate]">) {
+export default async function GatePage({
+  params,
+}: {
+  params: Promise<{ gate: string }>;
+}) {
   const { gate } = await params;
   const store = await getStore();
   const role = roleForLoginGate(gate, store.loginGates);

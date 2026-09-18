@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createRestock, deleteAdminRecord, deleteRestock, saveAdminData } from "@/actions/pos";
-import { costingIngredientForItem, cupsFromQuantity, formatQty, ingredientsForOrderLine, namesMatch, perCupAmount, remainingForUsages, roundQty, stockLedgerForRange } from "@/lib/inventory";
-import { phDateString, phDateTimeLabel, phIsoFromDate, phNowDateTime, phPeriodBounds, type PeriodRange } from "@/lib/datetime";
-import { isFoodOrPastry, orderSoldAsLabel, orderSoldAsLines } from "@/lib/menu";
+import { costingIngredientForItem, cupsFromQuantity, formatQty, ingredientsForOrderLine, looksLikeCupItem, namesMatch, perCupAmount, remainingForUsages, roundQty, stockLedgerForRange } from "@/lib/inventory";
+import { phDateString, phDateTimeLabel, phIsoFromDate, phPeriodBounds, type PeriodRange } from "@/lib/datetime";
+import { isFoodOrPastry, orderSoldAsLabel, orderSoldAsLines, orderSoldAsParts } from "@/lib/menu";
 import type { Order, RecipeIngredient, StoreData } from "@/lib/types";
 
 function inventoryUsagePerPiece(item: StockItem, used: number) {
@@ -51,7 +51,7 @@ type SalePurchaseTransactionsProps = {
 type Transaction = {
   id: string;
   productName: string;
-  productLines: string[];
+  productLines: { title: string; detail?: string }[];
   type: "Purchase" | "Sale";
   quantity: number;
   price: number;
@@ -66,10 +66,10 @@ function ordersToTransactions(orders: Order[]): Transaction[] {
     .map((order) => {
       const quantity = order.items.reduce((sum, item) => sum + item.qty, 0);
       const amount = order.total;
-      const productLines = orderSoldAsLines(order.items);
+      const productLines = orderSoldAsParts(order.items);
       return {
         id: order.id,
-        productName: productLines.join(", "),
+        productName: orderSoldAsLines(order.items).join(", "),
         productLines,
         type: (order.recordType === "Purchase" ? "Purchase" : "Sale") as "Purchase" | "Sale",
         quantity,
@@ -85,14 +85,14 @@ function ordersToTransactions(orders: Order[]): Transaction[] {
 const iconBtn =
   "inline-flex h-7 w-7 items-center justify-center rounded-lg text-neutral-400 transition-all hover:bg-neutral-100 hover:text-neutral-900";
 
-function DrinkLines({ lines }: { lines: string[] }) {
+function DrinkLines({ lines }: { lines: { title: string; detail?: string }[] }) {
   if (lines.length === 0) return <span>—</span>;
-  if (lines.length === 1) return <span className="break-words">{lines[0]}</span>;
   return (
-    <ul className="space-y-0.5">
+    <ul className="space-y-1">
       {lines.map((line, index) => (
-        <li key={`${line}-${index}`} className="break-words">
-          {line}
+        <li key={`${line.title}-${index}`} className="break-words">
+          <p>{line.title}</p>
+          {line.detail ? <p className="text-[11px] font-normal text-neutral-500">{line.detail}</p> : null}
         </li>
       ))}
     </ul>
@@ -122,12 +122,14 @@ function RowActions({
   onEdit,
   onDelete,
   onDeleteMouseDown,
+  deleteDisabled,
 }: {
   editLabel?: string;
   deleteLabel: string;
   onEdit?: () => void;
   onDelete: () => void;
   onDeleteMouseDown?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  deleteDisabled?: boolean;
 }) {
   return (
     <div className="inline-flex items-center justify-center gap-0.5">
@@ -139,9 +141,10 @@ function RowActions({
       <button
         type="button"
         aria-label={deleteLabel}
+        disabled={deleteDisabled}
         onMouseDown={onDeleteMouseDown}
         onClick={onDelete}
-        className={`${iconBtn} hover:bg-red-50 hover:text-red-600`}
+        className={`${iconBtn} hover:bg-red-50 hover:text-red-600 disabled:opacity-40`}
       >
         <TrashIcon />
       </button>
@@ -329,9 +332,8 @@ export function SalePurchaseTransactions({
 
   const getTodayDate = () => phDateString();
 
-  const getNowDateTime = () => phNowDateTime();
-
   const [transactions, setTransactions] = useState<Transaction[]>(persistedTransactions);
+  const [deletingTransactionId, setDeletingTransactionId] = useState<string | null>(null);
 
   const [stocks, setStocks] = useState<StockItem[]>(persistedStocks);
   const [unitSetupDrafts, setUnitSetupDrafts] = useState<Record<string, { purchaseUnitSize: string; unit?: string; cupUsageAmount: string }>>({});
@@ -375,6 +377,7 @@ export function SalePurchaseTransactions({
 
   const [inlineRestockValues, setInlineRestockValues] = useState<{ [key: string]: string }>({});
   const [stockNotice, setStockNotice] = useState<string | null>(null);
+  const [restockingItemId, setRestockingItemId] = useState<string | null>(null);
   const recipeMenu = store.menu ?? [];
   const recipeMap = store.recipes ?? {};
   type Costing = {
@@ -475,8 +478,8 @@ export function SalePurchaseTransactions({
   }, [drinkSearch, selectedDrinkCategories, unassignedMenuItems]);
 
   const cupInventoryItems = useMemo(
-    () => store.inventory.filter((item) => item.name.trim().toLowerCase().includes("cup")),
-    [store.inventory],
+    () => store.inventory.filter((item) => looksLikeCupItem(item, recipeCostings)),
+    [recipeCostings, store.inventory],
   );
 
   function addMenuItemToCosting(index: number, drink: string) {
@@ -776,22 +779,20 @@ export function SalePurchaseTransactions({
   }
 
   const handleDeleteTransaction = async (id: string) => {
-    const tx = transactions.find((t) => t.id === id);
-    if (tx) {
-      const { nextStocks, nextUsages } = applyTransactionInventoryEffect(
-        stocks,
-        usages,
-        tx.productName,
-        tx.type,
-        tx.quantity,
-        tx.date,
-        true,
-      );
-      const usagesWithoutTransaction = nextUsages.filter((usage) => usage.orderId !== id);
-      await persistInventoryAndUsage(nextStocks, usagesWithoutTransaction);
-    }
+    if (deletingTransactionId) return;
+    setDeletingTransactionId(id);
+    const previous = transactions;
     setTransactions((current) => current.filter((t) => t.id !== id));
-    await deleteAdminRecord("order", id);
+    try {
+      // delete_order_atomic restores stock and removes usage logs. The old
+      // persistInventoryAndUsage() rewrite of the whole store made this feel stuck.
+      await deleteAdminRecord("order", id);
+    } catch (error) {
+      setTransactions(previous);
+      throw error;
+    } finally {
+      setDeletingTransactionId(null);
+    }
   };
 
   const handleSaveStock = async (e: React.FormEvent) => {
@@ -890,14 +891,21 @@ export function SalePurchaseTransactions({
   };
 
   const handleInlineRestock = async (item: StockItem) => {
-    const amountStr = inlineRestockValues[item.id];
-    if (!amountStr) return;
-  const pieces = Number(amountStr);
-  if (isNaN(pieces) || pieces <= 0) return;
-  const addQty = toBaseQuantity(item, pieces);
-    const nowTime = getNowDateTime();
+    if (restockingItemId) return;
+    const pieces = Number(inlineRestockValues[item.id]);
+    if (!Number.isFinite(pieces) || pieces <= 0) {
+      setStockNotice("Enter a quantity in +Qty, then click Add.");
+      return;
+    }
 
+    const addQty = toBaseQuantity(item, pieces);
+    // Write the PH-local instant as an ISO timestamp so the ledger row lands
+    // in the correct PH calendar-day bucket (naive "YYYY-MM-DD HH:mm:ss" was
+    // stored as UTC and could shift a day).
+    const nowTime = phIsoFromDate(getTodayDate());
     const newRestockId = Date.now().toString() + Math.random();
+    const previousStocks = stocks;
+    const previousRestocks = restocks;
     const nextStocks = stocks.map((s) => s.id === item.id ? { ...s, stock: s.stock + addQty } : s);
     const newRestock: RestockRecord = {
       id: newRestockId,
@@ -905,13 +913,25 @@ export function SalePurchaseTransactions({
       quantityAdded: addQty,
       date: nowTime,
     };
+
+    setStockNotice(null);
+    setRestockingItemId(item.id);
     setStocks(nextStocks);
     setRestocks((current) => [newRestock, ...current]);
-    // Ledger row + stock adjustment happen in one DB transaction so they
-    // can never diverge (create_restock_atomic).
-    await createRestock({ id: newRestockId, inventoryItemId: item.id, itemNameSnapshot: item.name, quantityAdded: addQty, createdAt: nowTime });
+    setInlineRestockValues((current) => ({ ...current, [item.id]: "" }));
 
-    setInlineRestockValues({ ...inlineRestockValues, [item.id]: "" });
+    try {
+      // Ledger row + stock adjustment happen in one DB transaction so they
+      // can never diverge (create_restock_atomic).
+      await createRestock({ id: newRestockId, inventoryItemId: item.id, itemNameSnapshot: item.name, quantityAdded: addQty, createdAt: nowTime });
+    } catch (error) {
+      setStocks(previousStocks);
+      setRestocks(previousRestocks);
+      setInlineRestockValues((current) => ({ ...current, [item.id]: String(pieces) }));
+      setStockNotice(error instanceof Error ? error.message : "Could not restock that item.");
+    } finally {
+      setRestockingItemId(null);
+    }
   };
 
   const handleDeleteRestock = async (id: string) => {
@@ -997,8 +1017,8 @@ export function SalePurchaseTransactions({
       .filter((order) => !order.voided && inDateRange(order.createdAt))
       .map((order) => {
         const items = aggregateUsageRows(usages.filter((usage) => usage.orderId === order.id));
-        const soldAsLines = orderSoldAsLines(order.items);
-        const soldAs = soldAsLines.join(", ");
+        const soldAsLines = orderSoldAsParts(order.items);
+        const soldAs = orderSoldAsLines(order.items).join(", ");
         return {
           orderId: order.id,
           orderLabel: order.ticketNo != null ? `#${order.ticketNo}` : order.id,
@@ -1426,6 +1446,7 @@ export function SalePurchaseTransactions({
                       <td className="p-3 text-center">
                         <RowActions
                           deleteLabel={`Delete ${t.productName}`}
+                          deleteDisabled={deletingTransactionId === t.id}
                           onDelete={() => void handleDeleteTransaction(t.id)}
                         />
                       </td>
@@ -1443,10 +1464,9 @@ export function SalePurchaseTransactions({
           <div className="rounded-lg border border-neutral-300 bg-neutral-50 px-4 py-3">
             <div className="text-xs font-medium text-neutral-500">Total Cups Used</div>
             <div className="mt-1 text-xl font-semibold text-neutral-900">
-              {(["Daba Cup", "Peta Cup", "Hot Cup"] as const)
-                .reduce((total, cupName) => {
-                  const cupItem = stocks.find((item) => item.name.trim().toLowerCase() === cupName.toLowerCase());
-                  if (!cupItem) return total;
+              {stocks
+                .filter((item) => looksLikeCupItem(item, recipeCostings))
+                .reduce((total, cupItem) => {
                   const ledger = stockLedgerForRange({ itemName: cupItem.name, liveStock: cupItem.stock, from: rangeStart, to: rangeEnd, restocks, usages });
                   return total + Number(ledger.used || 0);
                 }, 0)
@@ -1575,22 +1595,31 @@ export function SalePurchaseTransactions({
                         {s.unit.trim().toLowerCase() === "pcs" || cupsLeft == null ? "—" : `${cupsLeft.toFixed(1)} cups`}
                       </td>
                       <td className="p-3 border-r border-neutral-200 text-center">
-                        <div className="flex items-center justify-center gap-1">
+                        <form
+                          className="flex items-center justify-center gap-1"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            void handleInlineRestock(s);
+                          }}
+                        >
                           <input
                             type="number"
+                            min="0.01"
+                            step="any"
                             placeholder="+Qty"
+                            aria-label={`Restock quantity for ${s.name}`}
                             value={inlineRestockValues[s.id] || ""}
                             onChange={(e) => setInlineRestockValues({ ...inlineRestockValues, [s.id]: e.target.value })}
                             className="w-20 bg-white border border-neutral-400 rounded px-2 py-1 text-xs text-right"
                           />
                           <button
-                            type="button"
-                            onClick={() => handleInlineRestock(s)}
-                            className="bg-black hover:bg-neutral-800 text-white px-2.5 py-1 rounded text-xs font-medium"
+                            type="submit"
+                            disabled={restockingItemId === s.id}
+                            className="bg-black hover:bg-neutral-800 text-white px-2.5 py-1 rounded text-xs font-medium disabled:opacity-40"
                           >
-                            Add
+                            {restockingItemId === s.id ? "Adding..." : "Add"}
                           </button>
-                        </div>
+                        </form>
                       </td>
 
                       <td className="p-3 text-center">
@@ -1633,7 +1662,7 @@ export function SalePurchaseTransactions({
                   }
                   return filteredRestocks.map((r) => (
                   <tr key={r.id} className="border-b border-neutral-200 text-xs">
-                    <td className="p-3 border-r border-neutral-200 text-neutral-600 font-medium">{r.date}</td>
+                    <td className="p-3 border-r border-neutral-200 text-neutral-600 font-medium">{phDateTimeLabel(r.date)}</td>
                     <td className="p-3 border-r border-neutral-200 font-medium">{r.itemName}</td>
                     <td className="p-3 border-r border-neutral-200 text-right font-bold text-black">
                       {/* quantity_added is stored in the item's base unit

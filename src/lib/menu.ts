@@ -48,6 +48,30 @@ export function addonIdFromName(name: string, index = 0) {
   return `${slug || "addon"}-${index}`;
 }
 
+export function parseStoredOrderAddons(value: unknown): OrderAddon[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry, index) => {
+    const row = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+    const name = String(row.name ?? "").trim();
+    if (!name) return [];
+    const qty = Math.max(1, Math.min(9, Math.floor(Number(row.qty) || 1)));
+    const inventoryItemId = String(row.inventoryItemId ?? "").trim();
+    const usageAmount = Math.max(0, Number(row.usageAmount) || 0);
+    const usageUnit = String(row.usageUnit ?? "").trim();
+    return [
+      {
+        id: String(row.id ?? "").trim() || addonIdFromName(name, index),
+        name,
+        price: Math.max(0, Math.round(Number(row.price) || 0)),
+        qty,
+        inventoryItemId: inventoryItemId || undefined,
+        usageAmount: usageAmount || undefined,
+        usageUnit: usageUnit || undefined,
+      },
+    ];
+  });
+}
+
 export function normalizeMenuAddons(item: Pick<MenuItem, "addons"> | undefined): MenuAddon[] {
   if (!Array.isArray(item?.addons)) return [];
   const seen = new Set<string>();
@@ -73,6 +97,17 @@ export function normalizeMenuAddons(item: Pick<MenuItem, "addons"> | undefined):
       },
     ];
   });
+}
+
+// Legacy rows written by another branch embed an options payload after this
+// marker in menu_items.image. We never write it, but we strip it on read /
+// validation so existing rows render and validate cleanly.
+const MENU_IMAGE_OPTIONS_MARK = "#cc-opt=";
+
+export function stripMenuImage(image: string) {
+  const value = String(image ?? "");
+  const index = value.indexOf(MENU_IMAGE_OPTIONS_MARK);
+  return (index >= 0 ? value.slice(0, index) : value) || "/images/logo.jpg";
 }
 
 export function addonAllowsQty(addon: Pick<MenuAddon, "name" | "qtyEnabled">) {
@@ -117,25 +152,90 @@ function addonPriceLabel(addon: OrderAddon) {
   return `${name} ₱${addon.price * qty}`;
 }
 
+function parseAddonLabels(raw: string): OrderAddon[] {
+  return raw.split(/\s*,\s*/).flatMap((part, index) => {
+    const text = part.trim();
+    if (!text) return [];
+    const match = /^(?:(\d+)\s*[×x]\s*)?(.+?)(?:\s*₱\s*(\d+))?$/i.exec(text);
+    if (!match) return [];
+    const name = match[2].trim();
+    if (!name) return [];
+    return [
+      {
+        id: addonIdFromName(name, index),
+        name,
+        price: match[3] ? Number(match[3]) : 0,
+        qty: match[1] ? Math.max(1, Number(match[1])) : 1,
+      },
+    ];
+  });
+}
+
+function cleanOrderItemName(name: string) {
+  return name
+    .replace(/\s*·\s*(Iced|Hot)(?:\s*\+\s*.*)?$/i, "")
+    .replace(/\s*\+\s*.+$/, "")
+    .replace(/\s*\((iced|hot)\)$/i, "")
+    .trim();
+}
+
+export function parseOrderItemSnapshot(name: string): {
+  name: string;
+  style?: DrinkStyle;
+  addons: OrderAddon[];
+} {
+  const raw = String(name ?? "").trim();
+  const withAddons = /^(.*?)\s*·\s*(Iced|Hot)\s*\+\s*(.+)$/i.exec(raw);
+  if (withAddons) {
+    return {
+      name: withAddons[1].trim() || raw,
+      style: withAddons[2].toLowerCase() === "hot" ? "hot" : "iced",
+      addons: parseAddonLabels(withAddons[3]),
+    };
+  }
+  const styleOnly = /^(.*?)\s*·\s*(Iced|Hot)\s*$/i.exec(raw) || /^(.*?)\s*\((Iced|Hot)\)\s*$/i.exec(raw);
+  if (styleOnly) {
+    return {
+      name: styleOnly[1].trim() || raw,
+      style: styleOnly[2].toLowerCase() === "hot" ? "hot" : "iced",
+      addons: [],
+    };
+  }
+  const addonsOnly = /^(.*?)\s*\+\s*(.+)$/.exec(raw);
+  if (addonsOnly && !/^[+\d]/.test(addonsOnly[1].trim())) {
+    return {
+      name: addonsOnly[1].trim() || raw,
+      addons: parseAddonLabels(addonsOnly[2]),
+    };
+  }
+  return { name: raw, addons: [] };
+}
+
+export function hydrateOrderLine<T extends Pick<OrderItem, "name" | "style" | "addons">>(item: T): T {
+  const parsed = parseOrderItemSnapshot(item.name);
+  const style = parseDrinkStyle(item.style) ?? parsed.style;
+  const addons = (item.addons ?? []).length > 0 ? item.addons : parsed.addons;
+  return {
+    ...item,
+    name: cleanOrderItemName(item.name) || parsed.name || item.name,
+    style,
+    addons,
+  };
+}
+
 export function orderLineOptionsLabel(item: Pick<OrderItem, "style" | "addons" | "name">) {
+  const hydrated = hydrateOrderLine(item);
   const parts: string[] = [];
-  const style =
-    parseDrinkStyle(item.style) ??
-    (/·\s*hot$/i.test(item.name) || /\(hot\)$/i.test(item.name)
-      ? "hot"
-      : /·\s*iced$/i.test(item.name) || /\(iced\)$/i.test(item.name)
-        ? "iced"
-        : undefined);
-  if (style) parts.push(drinkStyleLabel(style));
-  for (const addon of item.addons ?? []) {
+  if (hydrated.style) parts.push(drinkStyleLabel(hydrated.style));
+  for (const addon of hydrated.addons ?? []) {
     if (!addon?.name) continue;
     parts.push(addonPriceLabel(addon));
   }
   return parts.join(", ");
 }
 
-export function drinkDisplayName(item: Pick<OrderItem, "name">) {
-  return item.name.replace(/\s*·\s*(Iced|Hot)\s*$/i, "").trim() || item.name;
+export function drinkDisplayName(item: Pick<OrderItem, "name" | "style" | "addons">) {
+  return hydrateOrderLine(item).name || item.name;
 }
 
 export function orderLineListLabel(item: OrderItem) {
@@ -144,8 +244,23 @@ export function orderLineListLabel(item: OrderItem) {
   return options ? `${name} (${options})` : name;
 }
 
+export type OrderSoldLine = {
+  title: string;
+  detail?: string;
+};
+
+export function orderSoldAsParts(items: OrderItem[]): OrderSoldLine[] {
+  return items.map((item) => {
+    const options = orderLineOptionsLabel(item);
+    return {
+      title: `${item.qty}x ${drinkDisplayName(item)}`,
+      detail: options || undefined,
+    };
+  });
+}
+
 export function orderSoldAsLines(items: OrderItem[]) {
-  return items.map((item) => `${item.qty}x ${orderLineListLabel(item)}`);
+  return orderSoldAsParts(items).map((line) => (line.detail ? `${line.title} (${line.detail})` : line.title));
 }
 
 export function orderSoldAsLabel(items: OrderItem[]) {
