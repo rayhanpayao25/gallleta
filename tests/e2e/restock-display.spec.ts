@@ -140,6 +140,24 @@ test("restock tab: no form, no edit action, piece-quantity display, delete works
       const { data } = await supabase.from("restocks").select("id").eq("id", restockId);
       return (data ?? []).length === 0 ? true : null;
     });
+
+    // delete_restock_atomic reverses stock from the persisted row itself, so
+    // the base-unit stock returns to the exact pre-restock baseline even if
+    // the page's local state was stale at click time.
+    await pollUntil(async () => {
+      const { data } = await supabase.from("inventory_items").select("stock").eq("id", itemId).single();
+      return Number(data?.stock) === 0 ? true : null;
+    });
+
+    // And the deletion is durable - the row does not reappear after a full
+    // reload past the server cache TTL.
+    await page.waitForTimeout(6000);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await openAdminPanel(page, "Inventory");
+    await page.click('button:has-text("Restock")');
+    await page.locator('input[type="date"]').fill(phDay);
+    await page.waitForTimeout(1000);
+    await expect(page.locator("tr", { hasText: ITEM_NAME })).toHaveCount(0);
   } finally {
     if (restockId) {
       await supabase.from("restocks").delete().eq("id", restockId);

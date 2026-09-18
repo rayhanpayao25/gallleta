@@ -783,14 +783,12 @@ export async function deleteOrderRecord(id: string): Promise<void> {
 }
 
 export async function deleteRestockRecord(id: string): Promise<void> {
-  await enqueue(async () => {
-    const supabase = supabaseAdmin();
-    const { error } = await supabase.from("restocks").delete().eq("id", id);
-    if (error) throw new Error(`Unable to delete restock: ${error.message}`);
-    if (memoryStore) {
-      memoryStore.restocks = memoryStore.restocks.filter((record) => record.id !== id);
-    }
-  });
+  // Route through delete_restock_atomic so this legacy path also reverses
+  // stock from the persisted row instead of dropping the reversal entirely.
+  await deleteRestockAtomic({ id });
+  if (memoryStore) {
+    memoryStore.restocks = memoryStore.restocks.filter((record) => record.id !== id);
+  }
 }
 
 // Phase 8: atomic multi-table operations -----------------------------------
@@ -972,17 +970,15 @@ export async function editRestockAtomic(input: {
   });
 }
 
-export async function deleteRestockAtomic(input: {
-  id: string;
-  inventoryItemId: string | null;
-  quantityAdded: number;
-}): Promise<void> {
+export async function deleteRestockAtomic(input: { id: string }): Promise<void> {
   await enqueue(async () => {
     const supabase = supabaseAdmin();
+    // The persisted restocks row is authoritative for the reversal - the RPC
+    // ignores these caller params; nulls are sent only for signature compat.
     const { error } = await supabase.rpc("delete_restock_atomic", {
       p_id: input.id,
-      p_inventory_item_id: input.inventoryItemId,
-      p_quantity_added: input.quantityAdded,
+      p_inventory_item_id: null,
+      p_quantity_added: null,
     });
     if (error) throw new Error(`Unable to delete restock: ${error.message}`);
     invalidateStoreCache();

@@ -916,7 +916,6 @@ export function SalePurchaseTransactions({
 
   const handleDeleteRestock = async (id: string) => {
     const record = restocks.find((item) => item.id === id);
-    const matchedItem = record ? stocks.find((item) => namesMatch(item.name, record.itemName)) : undefined;
     if (record) {
       const nextStocks = stocks.map((item) =>
         namesMatch(item.name, record.itemName)
@@ -926,9 +925,10 @@ export function SalePurchaseTransactions({
       setStocks(nextStocks);
     }
     setRestocks((current) => current.filter((s) => s.id !== id));
-    // Ledger delete + stock reversal happen in one DB transaction
-    // (delete_restock_atomic).
-    await deleteRestock({ id, inventoryItemId: matchedItem?.id ?? null, quantityAdded: record?.quantityAdded ?? 0 });
+    // delete_restock_atomic locks the persisted row and reverses stock from
+    // its own inventory_item_id/quantity_added - the optimistic state update
+    // above is display-only and no longer affects correctness.
+    await deleteRestock({ id });
   };
 
   const handleSaveCosting = async (e: React.FormEvent) => {

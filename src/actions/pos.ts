@@ -256,7 +256,7 @@ export async function editRestock(input: {
   return { ok: true };
 }
 
-export async function deleteRestock(input: { id: string; inventoryItemId: string | null; quantityAdded: number }) {
+export async function deleteRestock(input: { id: string }) {
   await requireInventoryAccess(false);
   await deleteRestockAtomic(input);
   revalidatePath("/pos");
