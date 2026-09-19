@@ -24,8 +24,8 @@ test("menu add-on config and order-line options persist through the real UI", as
   await form.locator("input").nth(0).fill(itemName);
   await form.locator('input[type="number"]').fill("150");
   await form.locator("select").selectOption({ label: "Special" });
-  // Both styles default to on - turn "Hot" off so the item is iced-only.
-  await form.locator('button:has-text("Hot")').click();
+  // Type selection starts empty (KAN-127): select "Iced" so the item is iced-only.
+  await form.locator('button:has-text("Iced")').click();
   await form.locator('button:has-text("Add option")').click();
   await form.locator('input[placeholder="Oat milk"]').fill("Extra Shot");
   await form.locator('input[aria-label="Add-on extra price"]').fill("30");

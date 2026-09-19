@@ -103,7 +103,7 @@ export function MenuCatalog({ menu, categories, inventory = [] }: MenuCatalogPro
   const [itemPrice, setItemPrice] = useState("");
   const [itemCategory, setItemCategory] = useState("");
   const [itemAvailable, setItemAvailable] = useState(true);
-  const [itemStyles, setItemStyles] = useState<DrinkStyle[]>([...DRINK_STYLES]);
+  const [itemStyles, setItemStyles] = useState<DrinkStyle[]>([]);
   const [itemAddons, setItemAddons] = useState<MenuAddon[]>([]);
 
   const counts = useMemo(() => {
@@ -132,7 +132,7 @@ export function MenuCatalog({ menu, categories, inventory = [] }: MenuCatalogPro
     setItemPrice("");
     setItemCategory(filter !== "All" ? filter : categories[0] ?? "");
     setItemAvailable(true);
-    setItemStyles(isFoodOrPastry(filter !== "All" ? filter : categories[0] ?? "") ? [] : [...DRINK_STYLES]);
+    setItemStyles([]);
     setItemAddons([]);
     setNotice(null);
     setTab("items");
@@ -161,6 +161,7 @@ export function MenuCatalog({ menu, categories, inventory = [] }: MenuCatalogPro
     data.set("price", itemPrice);
     data.set("category", itemCategory);
     data.set("available", itemAvailable ? "true" : "false");
+    data.set("stylesField", "1");
     for (const style of itemStyles) data.append("styles", style);
     data.set("addons", JSON.stringify(itemAddons.filter((addon) => addon.name.trim())));
     return data;
@@ -428,7 +429,7 @@ export function MenuCatalog({ menu, categories, inventory = [] }: MenuCatalogPro
                       onChange={(event) => {
                         const next = event.target.value;
                         setItemCategory(next);
-                        setItemStyles(isFoodOrPastry(next) ? [] : itemStyles.length > 0 ? itemStyles : [...DRINK_STYLES]);
+                        if (isFoodOrPastry(next)) setItemStyles([]);
                       }}
                       className={field}
                       required

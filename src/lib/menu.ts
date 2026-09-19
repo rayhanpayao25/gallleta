@@ -26,9 +26,11 @@ export function drinkStyleLabel(style: DrinkStyle) {
 
 export function normalizeMenuStyles(item: Pick<MenuItem, "category" | "styles">): DrinkStyle[] {
   if (isFoodOrPastry(item.category)) return [];
+  // Missing/non-array means the field was never persisted (legacy rows) -
+  // those default to both styles. An explicit empty array is a real "no
+  // type" selection and must round-trip as empty.
   const raw = Array.isArray(item.styles) ? item.styles : DRINK_STYLES;
-  const next = DRINK_STYLES.filter((style) => raw.includes(style));
-  return next.length > 0 ? next : [...DRINK_STYLES];
+  return DRINK_STYLES.filter((style) => raw.includes(style));
 }
 
 export function drinkStyleLabelList(item: Pick<MenuItem, "category" | "styles">) {

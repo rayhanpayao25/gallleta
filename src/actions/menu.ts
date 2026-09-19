@@ -2,8 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/auth";
-import { addonIdFromName, isFoodOrPastry, menuItemId, normalizeMenuAddons, normalizeMenuStyles, stripMenuImage } from "@/lib/menu";
-import type { DrinkStyle, MenuAddon } from "@/lib/types";
+import { addonIdFromName, DRINK_STYLES, isFoodOrPastry, menuItemId, normalizeMenuAddons, normalizeMenuStyles, stripMenuImage } from "@/lib/menu";
+import type { DrinkStyle, MenuAddon, MenuItem } from "@/lib/types";
 import {
   deleteMenuCategoryRecord,
   deleteMenuItemRecord,
@@ -82,13 +82,19 @@ function photoFromForm(formData: FormData) {
   return photo instanceof File && photo.size > 0 ? photo : null;
 }
 
-function stylesFromForm(formData: FormData, category: string): DrinkStyle[] {
+function stylesFromForm(formData: FormData, category: string, existing?: MenuItem): DrinkStyle[] {
   if (isFoodOrPastry(category)) return [];
   const selected: DrinkStyle[] = formData.getAll("styles").flatMap((value) => {
     const style = String(value);
     return style === "iced" || style === "hot" ? [style] : [];
   });
-  return normalizeMenuStyles({ category, styles: selected });
+  // The current form always sends stylesField=1, so "no styles keys" means
+  // the admin deliberately selected none - persist the empty selection.
+  // Without the marker (an older build), fall back to the previous semantics:
+  // keep the item's existing styles on edit, or default to both on create.
+  if (formData.get("stylesField") === "1") return selected;
+  if (selected.length > 0) return normalizeMenuStyles({ category, styles: selected });
+  return normalizeMenuStyles({ category, styles: existing?.styles ?? DRINK_STYLES });
 }
 
 function addonsFromForm(formData: FormData): MenuAddon[] {
@@ -255,7 +261,7 @@ export async function updateMenuItem(formData: FormData) {
     price: Math.round(price),
     category,
     available,
-    styles: stylesFromForm(formData, category),
+    styles: stylesFromForm(formData, category, existing),
     addons: addonsFromForm(formData),
     image: uploaded ?? (isSafeImage(existing.image) ? existing.image : "/images/logo.jpg"),
   });
