@@ -151,6 +151,7 @@ export type UsageLog = {
   id: string;
   orderId: string;
   orderItemId: string;
+  inventoryItemId?: string;
   date: string;
   itemName: string;
   usedAmount: number;
@@ -160,8 +161,14 @@ export type UsageLog = {
 
 export type RestockRecord = {
   id: string;
+  inventoryItemId?: string;
   itemName: string;
   quantityAdded: number;
+  // Purchase-facing snapshot of what the admin entered (e.g. 10 pcs) while
+  // quantityAdded stays in normalized base units (e.g. 10000 ml). Nullable -
+  // legacy rows predate these fields (KAN-126).
+  purchaseQty?: number;
+  purchaseUnit?: string;
   date: string;
 };
 

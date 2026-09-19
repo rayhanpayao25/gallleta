@@ -25,30 +25,48 @@ function itemKey(name: string) {
   return name.trim().toLowerCase();
 }
 
-export function namesMatch(a: string, b: string) {
-  const left = a.trim().toLowerCase();
-  const right = b.trim().toLowerCase();
-  if (!left || !right) return false;
-  return left === right || left.includes(right) || right.includes(left);
+// Inventory identity is exact-after-normalization only. Substring
+// containment leaked usage/restock/costing aggregates between similarly
+// named items (e.g. "Milk" vs "Milk Automation - Stock"), so identity
+// matching must never use fuzzy containment (KAN-125).
+export function itemNameEquals(a: string, b: string) {
+  const left = a.trim().toLowerCase().normalize("NFKC").replace(/\s+/g, " ");
+  const right = b.trim().toLowerCase().normalize("NFKC").replace(/\s+/g, " ");
+  return Boolean(left && left === right);
+}
+
+// Ledger rows carry inventory_item_id; legacy rows may not. When the caller
+// knows the item's id, the id decides and only id-less rows fall back to an
+// exact normalized-name comparison.
+export function matchesInventoryRow(
+  row: { itemName: string; inventoryItemId?: string },
+  item: { name: string; inventoryItemId?: string },
+) {
+  if (item.inventoryItemId && row.inventoryItemId) {
+    return row.inventoryItemId === item.inventoryItemId;
+  }
+  return itemNameEquals(row.itemName, item.name);
 }
 
 export function stockLedgerForDate(input: {
   itemName: string;
+  inventoryItemId?: string;
   liveStock: number;
   date: string;
-  restocks: { itemName: string; quantityAdded: number; date: string }[];
-  usages: { itemName: string; usedAmount: number; date: string }[];
+  restocks: { itemName: string; quantityAdded: number; date: string; inventoryItemId?: string }[];
+  usages: { itemName: string; usedAmount: number; date: string; inventoryItemId?: string }[];
 }): { opening: number; restocked: number; used: number; remaining: number } {
   return stockLedgerForRange({ ...input, from: input.date, to: input.date });
 }
 
 export function stockLedgerForRange(input: {
   itemName: string;
+  inventoryItemId?: string;
   liveStock: number;
   from: string;
   to: string;
-  restocks: { itemName: string; quantityAdded: number; date: string }[];
-  usages: { itemName: string; usedAmount: number; date: string }[];
+  restocks: { itemName: string; quantityAdded: number; date: string; inventoryItemId?: string }[];
+  usages: { itemName: string; usedAmount: number; date: string; inventoryItemId?: string }[];
 }): { opening: number; restocked: number; used: number; remaining: number } {
   const from = input.from <= input.to ? input.from : input.to;
   const to = input.from <= input.to ? input.to : input.from;
@@ -58,23 +76,24 @@ export function stockLedgerForRange(input: {
     return day >= from && day <= to;
   };
 
+  const item = { name: input.itemName, inventoryItemId: input.inventoryItemId };
   const sumRestocks = (
-    rows: { itemName: string; quantityAdded: number; date: string }[],
+    rows: { itemName: string; quantityAdded: number; date: string; inventoryItemId?: string }[],
     matchesDate: (value: string) => boolean,
   ) =>
     roundQty(
       rows
-        .filter((row) => namesMatch(row.itemName, input.itemName) && matchesDate(row.date))
+        .filter((row) => matchesInventoryRow(row, item) && matchesDate(row.date))
         .reduce((sum, row) => sum + (Number(row.quantityAdded) || 0), 0),
     );
 
   const sumUsages = (
-    rows: { itemName: string; usedAmount: number; date: string }[],
+    rows: { itemName: string; usedAmount: number; date: string; inventoryItemId?: string }[],
     matchesDate: (value: string) => boolean,
   ) =>
     roundQty(
       rows
-        .filter((row) => namesMatch(row.itemName, input.itemName) && matchesDate(row.date))
+        .filter((row) => matchesInventoryRow(row, item) && matchesDate(row.date))
         .reduce((sum, row) => sum + (Number(row.usedAmount) || 0), 0),
     );
 
@@ -234,7 +253,7 @@ function addonIngredientsForOrderLine(
   return (line.addons ?? []).flatMap((selected) => {
     const spec =
       catalog.get(String(selected.id ?? "")) ??
-      [...catalog.values()].find((addon) => namesMatch(addon.name, selected.name));
+      [...catalog.values()].find((addon) => itemNameEquals(addon.name, selected.name));
     const inventoryItemId = String(spec?.inventoryItemId || selected.inventoryItemId || "").trim();
     const usageAmount = Number(spec?.usageAmount ?? selected.usageAmount) || 0;
     const qty = Math.max(1, Number(selected.qty) || 1);
@@ -243,7 +262,7 @@ function addonIngredientsForOrderLine(
 
     const stock =
       inventory.find((item) => item.id === inventoryItemId) ??
-      inventory.find((item) => namesMatch(item.name, spec?.name || selected.name));
+      inventory.find((item) => itemNameEquals(item.name, spec?.name || selected.name));
     if (!stock) return [];
 
     return [
@@ -291,7 +310,7 @@ export function ingredientsForOrderLine(
     if (cupIds.has(ingredient.inventoryItemId)) return true;
     const stock =
       inventory.find((item) => item.id === ingredient.inventoryItemId) ??
-      inventory.find((item) => namesMatch(item.name, ingredient.name));
+      inventory.find((item) => itemNameEquals(item.name, ingredient.name));
     return stock
       ? looksLikeCupItem(stock, store.recipeCostings)
       : looksLikeCupItem({ name: ingredient.name }, store.recipeCostings);

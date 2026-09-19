@@ -232,6 +232,8 @@ export async function createRestock(input: {
   itemNameSnapshot: string;
   quantityAdded: number;
   createdAt: string;
+  purchaseQty?: number | null;
+  purchaseUnit?: string | null;
 }) {
   await requireInventoryAccess(false);
   await createRestockAtomic(input);
@@ -248,6 +250,8 @@ export async function editRestock(input: {
   newItemNameSnapshot: string;
   newQuantity: number;
   newCreatedAt: string;
+  newPurchaseQty?: number | null;
+  newPurchaseUnit?: string | null;
 }) {
   await requireInventoryAccess(false);
   await editRestockAtomic(input);

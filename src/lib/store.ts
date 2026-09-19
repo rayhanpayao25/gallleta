@@ -165,8 +165,13 @@ function normalizeStore(store: StoreData): StoreData {
         (job.type === "cup-label" || job.type === "customer-receipt"),
     );
   }
-  if (!Array.isArray(store.menu) || store.menu.length === 0) {
-    store.menu = DEFAULT_MENU.map((item) => ({ ...item }));
+  // An empty menu/categories set is valid, intentional state once the
+  // database has been initialized - normalizeStore must never fabricate
+  // DEFAULT_MENU/MENU_CATEGORIES into it (that is how deleted items used to
+  // reappear, KAN-123). First-run defaults are seeded explicitly and once by
+  // readStore when the database is truly virgin.
+  if (!Array.isArray(store.menu)) {
+    store.menu = [];
   } else {
     store.menu = store.menu
       .filter(
@@ -180,17 +185,11 @@ function normalizeStore(store: StoreData): StoreData {
         styles: normalizeMenuStyles(item),
         addons: normalizeMenuAddons(item),
       }));
-    if (store.menu.length === 0) {
-      store.menu = DEFAULT_MENU.map((item) => ({ ...item }));
-    }
   }
   store.categories = uniqueCategories([
     ...(Array.isArray(store.categories) ? store.categories : []),
     ...store.menu.map((item) => item.category),
   ]);
-  if (store.categories.length === 0) {
-    store.categories = [...MENU_CATEGORIES];
-  }
   if (!Array.isArray(store.promotions) || store.promotions.length === 0) {
     store.promotions = DEFAULT_PROMOS.map((item) => ({ ...item }));
   } else {
@@ -429,6 +428,25 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
     throw new Error(`Unable to read store data: ${message}`);
   }
 
+  // First-run bootstrap. Previously normalizeStore fabricated DEFAULT_MENU/
+  // MENU_CATEGORIES in memory whenever the tables read empty and the next
+  // writeStore persisted them - which is also how intentionally deleted
+  // items kept coming back (KAN-123). Defaults are now seeded explicitly,
+  // once, and only when the whole database is virgin: an intentionally
+  // emptied menu in a system that still has users/orders/inventory stays
+  // empty.
+  const virgin =
+    (menu.data ?? []).length === 0 &&
+    (categories.data ?? []).length === 0 &&
+    (users.data ?? []).length === 0 &&
+    (orders.data ?? []).length === 0 &&
+    (inventory.data ?? []).length === 0 &&
+    (promotions.data ?? []).length === 0;
+  if (virgin) {
+    await seedInitialStore(supabase);
+    return readStore({ ...options, fresh: true });
+  }
+
   const base = emptyStore();
   const rows = orders.data ?? [];
   const items = orderItems.data ?? [];
@@ -516,8 +534,8 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
       voided: row.voided,
       voidReason: row.void_reason ?? undefined,
     })),
-    usageLogs: (usageLogs.data ?? []).map((row) => ({ id: row.id, orderId: row.order_id ?? "", orderItemId: row.order_item_id ?? "", date: row.created_at, itemName: row.item_name_snapshot, usedAmount: Number(row.used_amount), unit: row.unit })),
-    restocks: (restocks.data ?? []).map((row) => ({ id: row.id, itemName: row.item_name_snapshot, quantityAdded: Number(row.quantity_added), date: row.created_at })),
+    usageLogs: (usageLogs.data ?? []).map((row) => ({ id: row.id, orderId: row.order_id ?? "", orderItemId: row.order_item_id ?? "", inventoryItemId: row.inventory_item_id ?? undefined, date: row.created_at, itemName: row.item_name_snapshot, usedAmount: Number(row.used_amount), unit: row.unit })),
+    restocks: (restocks.data ?? []).map((row) => ({ id: row.id, inventoryItemId: row.inventory_item_id ?? undefined, itemName: row.item_name_snapshot, quantityAdded: Number(row.quantity_added), purchaseQty: row.purchase_qty == null ? undefined : Number(row.purchase_qty), purchaseUnit: row.purchase_unit ?? undefined, date: row.created_at })),
     costings: (costings.data ?? []).map((row) => ({ id: row.id, productName: row.product_name, ingredients: (costingIngredients.data ?? []).filter((ingredient) => ingredient.costing_id === row.id).map((ingredient) => ({ name: ingredient.name, amount: Number(ingredient.amount), unit: ingredient.unit, outputCups: ingredient.output_cups })) })),
     recipes: Object.fromEntries((recipes.data ?? []).reduce((entries, row) => { const list = entries.get(row.menu_item_id) ?? []; list.push({ inventoryItemId: row.inventory_item_id, name: "", amount: Number(row.amount), unit: row.unit }); entries.set(row.menu_item_id, list); return entries; }, new Map<string, RecipeIngredient[]>())),
     // created_at ordering here preserves insertion order, which
@@ -592,40 +610,6 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
 async function writeStore(store: StoreData): Promise<void> {
   if (Array.isArray(store.printJobs) && store.printJobs.length > 300) store.printJobs = store.printJobs.slice(-300);
   const supabase = supabaseAdmin();
-  const categoryRows = Array.from(
-    new Map(
-      store.categories
-        .map((name) => name.trim())
-        .filter(Boolean)
-        .map((name) => [name.toLowerCase(), name] as const),
-    ).values(),
-  ).map((name) => ({
-    id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "other",
-    name,
-  }));
-  const { data: existingCategories, error: categoryReadError } = await supabase
-    .from("menu_categories")
-    .select("id, name");
-
-  if (categoryReadError) {
-    throw new Error(`Unable to read menu categories: ${categoryReadError.message}`);
-  }
-
-  const existingCategoryIds = new Map(
-    (existingCategories ?? []).map((row) => [row.name.trim().toLowerCase(), row.id]),
-  );
-  const categoryId = new Map(
-    categoryRows.map((row) => [
-      row.name.toLowerCase(),
-      existingCategoryIds.get(row.name.toLowerCase()) ?? row.id,
-    ]),
-  );
-  const categoriesToWrite = categoryRows
-    .filter((row) => !existingCategoryIds.has(row.name.toLowerCase()))
-    .map((row) => ({
-      ...row,
-      id: categoryId.get(row.name.toLowerCase()) ?? row.id,
-    }));
   const uniqueUsers = Array.from(
     new Map(
       store.users.map((user) => [
@@ -700,8 +684,16 @@ async function writeStore(store: StoreData): Promise<void> {
   // menu_item_id is a live-lookup convenience with an FK: it must be null
   // when the line's productId is not a current menu_items.id (deleted menu
   // items, manual/synthetic lines) - same rule create_order_atomic uses -
-  // otherwise the upsert violates the FK and fails the entire save.
-  const menuIds = new Set(store.menu.map((menuItem) => menuItem.id));
+  // otherwise the upsert violates the FK and fails the entire save. The set
+  // is read from the live table, not this possibly-stale snapshot: a generic
+  // write must never resurrect a deleted menu row to satisfy the FK.
+  const { data: liveMenuRows, error: liveMenuError } = await supabase
+    .from("menu_items")
+    .select("id");
+  if (liveMenuError) {
+    throw new Error(`Unable to read menu items: ${liveMenuError.message}`);
+  }
+  const menuIds = new Set((liveMenuRows ?? []).map((row) => row.id));
   const operations = await Promise.all([
     supabase.from("pos_state").upsert({ id: POS_STATE_ID, is_open: store.pos.isOpen, opened_at: store.pos.openedAt, opened_by_name: store.pos.openedBy, updated_at: new Date().toISOString() }),
     supabase.from("staff_users").upsert(
@@ -715,8 +707,6 @@ async function writeStore(store: StoreData): Promise<void> {
       })),
       { onConflict: "id" },
     ),
-    supabase.from("menu_categories").insert(categoriesToWrite),
-    supabase.from("menu_items").upsert(store.menu.map((item) => ({ id: item.id, name: item.name, price: Math.round(item.price), category_id: categoryId.get(item.category.toLowerCase()) ?? "other", image: stripMenuImage(item.image), available: item.available, styles: normalizeMenuStyles(item), addons: normalizeMenuAddons(item) })), { onConflict: "id" }),
     supabase.from("promotions").upsert(store.promotions.map((promo) => ({ id: promo.id, label: promo.label, type: promo.type, value: Math.round(promo.value), active: promo.active })), { onConflict: "id" }),
     supabase.from("inventory_items").upsert(store.inventory.map((item) => ({
       id: item.id,
@@ -731,13 +721,76 @@ async function writeStore(store: StoreData): Promise<void> {
       cups_make: item.cupsMake ?? null,
     })), { onConflict: "id" }),
     supabase.from("order_items").upsert(store.orders.flatMap((order) => order.items.map((item, index) => ({ id: `${order.id}-item-${index + 1}`, order_id: order.id, menu_item_id: menuIds.has(item.productId) ? item.productId : null, product_id_snapshot: item.productId, name_snapshot: item.name, qty: item.qty, price_snapshot: item.price, style: item.style ?? null, addons: item.addons ?? [] }))), { onConflict: "id" }),
-    supabase.from("usage_logs").upsert(store.usageLogs.map((log) => ({ id: log.id, order_id: log.orderId || null, order_item_id: log.orderItemId || null, item_name_snapshot: log.itemName, used_amount: log.usedAmount, unit: log.unit })), { onConflict: "id" }),
-    supabase.from("restocks").upsert(store.restocks.map((record) => ({ id: record.id, item_name_snapshot: record.itemName, quantity_added: record.quantityAdded })), { onConflict: "id" }),
+    supabase.from("usage_logs").upsert(store.usageLogs.map((log) => ({ id: log.id, order_id: log.orderId || null, order_item_id: log.orderItemId || null, item_name_snapshot: log.itemName, used_amount: log.usedAmount, unit: log.unit, ...(log.inventoryItemId ? { inventory_item_id: log.inventoryItemId } : {}) })), { onConflict: "id" }),
+    supabase.from("restocks").upsert(store.restocks.map((record) => ({ id: record.id, item_name_snapshot: record.itemName, quantity_added: record.quantityAdded, ...(record.inventoryItemId ? { inventory_item_id: record.inventoryItemId } : {}), ...(record.purchaseQty != null ? { purchase_qty: record.purchaseQty } : {}), ...(record.purchaseUnit ? { purchase_unit: record.purchaseUnit } : {}) })), { onConflict: "id" }),
   ]);
   const error = operations.find((result) => result.error)?.error;
   if (error) throw new Error(`Unable to save store data: ${error.message}`);
   memoryStore = store;
   memoryStoreReadAt = Date.now();
+}
+
+// One-time bootstrap for a virgin database (see the virgin check in
+// readStore). Inserts the shipping defaults directly - no StoreData
+// snapshot is involved, so nothing stale can leak in.
+async function seedInitialStore(
+  supabase: ReturnType<typeof supabaseAdmin>,
+): Promise<void> {
+  const categoryRows = MENU_CATEGORIES.map((name) => ({
+    id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "other",
+    name,
+  }));
+  const categoryId = new Map(
+    categoryRows.map((row) => [row.name.toLowerCase(), row.id]),
+  );
+  const results = await Promise.all([
+    supabase.from("menu_categories").insert(categoryRows),
+    supabase.from("staff_users").insert(
+      DEFAULT_USERS.map((user) => ({
+        id: user.id,
+        username: user.username.trim().toLowerCase(),
+        password: user.password,
+        name: user.name,
+        role: user.role === "admin" ? "admin" : "barista",
+        title: user.title,
+      })),
+    ),
+    supabase.from("promotions").insert(
+      DEFAULT_PROMOS.map((promo) => ({
+        id: promo.id,
+        label: promo.label,
+        type: promo.type,
+        value: Math.round(promo.value),
+        active: promo.active,
+      })),
+    ),
+    supabase.from("pos_state").upsert({
+      id: POS_STATE_ID,
+      is_open: false,
+      opened_at: null,
+      opened_by_name: null,
+      updated_at: new Date().toISOString(),
+    }),
+  ]);
+  const seedError = results.find((result) => result.error)?.error;
+  if (seedError) {
+    throw new Error(`Unable to seed store data: ${seedError.message}`);
+  }
+  const { error: menuError } = await supabase.from("menu_items").insert(
+    DEFAULT_MENU.map((item) => ({
+      id: item.id,
+      name: item.name,
+      price: Math.round(item.price),
+      category_id: categoryId.get(item.category.toLowerCase()) ?? "other",
+      image: stripMenuImage(item.image),
+      available: item.available,
+      styles: normalizeMenuStyles(item),
+      addons: normalizeMenuAddons(item),
+    })),
+  );
+  if (menuError) {
+    throw new Error(`Unable to seed menu items: ${menuError.message}`);
+  }
 }
 
 function withStore<T>(
@@ -902,6 +955,7 @@ export async function createOrderAtomic(input: {
           id: `${order.id}-${deduction.inventoryItemId}-usage`,
           orderId: order.id,
           orderItemId: deduction.orderItemId ?? "",
+          inventoryItemId: deduction.inventoryItemId,
           date: order.createdAt,
           itemName: deduction.itemName,
           usedAmount: deduction.amount,
@@ -968,6 +1022,8 @@ export async function createRestockAtomic(input: {
   itemNameSnapshot: string;
   quantityAdded: number;
   createdAt: string;
+  purchaseQty?: number | null;
+  purchaseUnit?: string | null;
 }): Promise<void> {
   await enqueue(async () => {
     const supabase = supabaseAdmin();
@@ -977,6 +1033,8 @@ export async function createRestockAtomic(input: {
       p_item_name_snapshot: input.itemNameSnapshot,
       p_quantity_added: input.quantityAdded,
       p_created_at: input.createdAt,
+      p_purchase_qty: input.purchaseQty ?? null,
+      p_purchase_unit: input.purchaseUnit ?? null,
     });
     if (error) throw new Error(`Unable to create restock: ${error.message}`);
     invalidateStoreCache();
@@ -991,6 +1049,8 @@ export async function editRestockAtomic(input: {
   newItemNameSnapshot: string;
   newQuantity: number;
   newCreatedAt: string;
+  newPurchaseQty?: number | null;
+  newPurchaseUnit?: string | null;
 }): Promise<void> {
   await enqueue(async () => {
     const supabase = supabaseAdmin();
@@ -1002,6 +1062,8 @@ export async function editRestockAtomic(input: {
       p_new_item_name_snapshot: input.newItemNameSnapshot,
       p_new_quantity: input.newQuantity,
       p_new_created_at: input.newCreatedAt,
+      p_new_purchase_qty: input.newPurchaseQty ?? null,
+      p_new_purchase_unit: input.newPurchaseUnit ?? null,
     });
     if (error) throw new Error(`Unable to edit restock: ${error.message}`);
     invalidateStoreCache();
@@ -1131,6 +1193,131 @@ export async function deleteMenuCategoryRecord(name: string): Promise<void> {
       memoryStore.categories = memoryStore.categories.filter(
         (entry) => entry.toLowerCase() !== name.toLowerCase(),
       );
+    }
+  });
+}
+
+// Menu items/categories are persisted through the targeted helpers below,
+// never through writeStore's whole-array upserts - a stale StoreData
+// snapshot must not be able to re-insert a deleted row (KAN-123).
+async function ensureMenuCategoryId(
+  supabase: ReturnType<typeof supabaseAdmin>,
+  name: string,
+): Promise<string> {
+  const trimmed = name.trim();
+  const { data: existing, error: lookupError } = await supabase
+    .from("menu_categories")
+    .select("id, name");
+  if (lookupError) {
+    throw new Error(`Unable to read menu categories: ${lookupError.message}`);
+  }
+  const found = (existing ?? []).find(
+    (row) => row.name.trim().toLowerCase() === trimmed.toLowerCase(),
+  );
+  if (found) return found.id;
+
+  const id = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "other";
+  const { error } = await supabase
+    .from("menu_categories")
+    .insert({ id, name: trimmed });
+  if (error) {
+    // Another instance may have created it between the lookup and insert.
+    const { data: retry } = await supabase
+      .from("menu_categories")
+      .select("id, name");
+    const retryFound = (retry ?? []).find(
+      (row) => row.name.trim().toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (retryFound) return retryFound.id;
+    throw new Error(`Unable to create menu category: ${error.message}`);
+  }
+  if (
+    memoryStore &&
+    !memoryStore.categories.some(
+      (entry) => entry.toLowerCase() === trimmed.toLowerCase(),
+    )
+  ) {
+    memoryStore.categories.push(trimmed);
+  }
+  return id;
+}
+
+export async function upsertMenuItemRecord(item: MenuItem): Promise<void> {
+  await enqueue(async () => {
+    const supabase = supabaseAdmin();
+    const categoryId = await ensureMenuCategoryId(supabase, item.category);
+    const { error } = await supabase.from("menu_items").upsert(
+      {
+        id: item.id,
+        name: item.name,
+        price: Math.round(item.price),
+        category_id: categoryId,
+        image: stripMenuImage(item.image),
+        available: item.available,
+        styles: normalizeMenuStyles(item),
+        addons: normalizeMenuAddons(item),
+      },
+      { onConflict: "id" },
+    );
+    if (error) throw new Error(`Unable to save menu item: ${error.message}`);
+    if (memoryStore) {
+      const index = memoryStore.menu.findIndex((entry) => entry.id === item.id);
+      if (index >= 0) memoryStore.menu[index] = { ...item };
+      else memoryStore.menu.push({ ...item });
+    }
+  });
+}
+
+export async function insertMenuCategoryRecord(
+  name: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  return enqueue(async () => {
+    const supabase = supabaseAdmin();
+    const trimmed = name.trim();
+    const { data: existing, error: lookupError } = await supabase
+      .from("menu_categories")
+      .select("id, name");
+    if (lookupError) {
+      throw new Error(`Unable to read menu categories: ${lookupError.message}`);
+    }
+    const found = (existing ?? []).some(
+      (row) => row.name.trim().toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (found) return { ok: false, error: "That category is already on the board." };
+
+    const id = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "other";
+    const { error } = await supabase
+      .from("menu_categories")
+      .insert({ id, name: trimmed });
+    if (error) {
+      throw new Error(`Unable to create menu category: ${error.message}`);
+    }
+    if (
+      memoryStore &&
+      !memoryStore.categories.some(
+        (entry) => entry.toLowerCase() === trimmed.toLowerCase(),
+      )
+    ) {
+      memoryStore.categories.push(trimmed);
+    }
+    return { ok: true };
+  });
+}
+
+export async function setMenuItemAvailableRecord(
+  id: string,
+  available: boolean,
+): Promise<void> {
+  await enqueue(async () => {
+    const supabase = supabaseAdmin();
+    const { error } = await supabase
+      .from("menu_items")
+      .update({ available })
+      .eq("id", id);
+    if (error) throw new Error(`Unable to update menu item: ${error.message}`);
+    if (memoryStore) {
+      const item = memoryStore.menu.find((entry) => entry.id === id);
+      if (item) item.available = available;
     }
   });
 }

@@ -3,7 +3,7 @@ import path from "path";
 import { test, expect } from "@playwright/test";
 import { supabaseTestClient, e2eId } from "../e2e/utils";
 import { parseMenuImageOptions } from "@/lib/menu";
-import { updateStore, getFreshStore, deleteMenuItemRecord, createOrderAtomic } from "@/lib/store";
+import { getFreshStore, deleteMenuItemRecord, createOrderAtomic, upsertMenuItemRecord } from "@/lib/store";
 
 // Regression coverage for clean menu/order option persistence:
 //  - menu_items.styles / menu_items.addons are the write+read source of truth
@@ -51,25 +51,23 @@ test.describe("menu/order option persistence", () => {
     expect(parseMenuImageOptions("/img.png#cc-opt=aGVsbG8")).toEqual({ styles: [], addons: [] });
   });
 
-  test("menu item styles/addons persist through updateStore and survive a fresh read", async () => {
+  test("menu item styles/addons persist through the targeted write path and survive a fresh read", async () => {
     ensureStoreEnv();
     const supabase = supabaseTestClient();
     const id = e2eId("addon-menu");
 
     try {
-      await updateStore((store) => {
-        store.menu.push({
-          id,
-          name: "E2E Addon Drink",
-          price: 150,
-          category: "Special",
-          image: "/images/logo.jpg",
-          available: true,
-          styles: ["iced"],
-          addons: [
-            { id: "extra-shot-0", name: "Extra Shot", price: 30, qtyEnabled: true },
-          ],
-        });
+      await upsertMenuItemRecord({
+        id,
+        name: "E2E Addon Drink",
+        price: 150,
+        category: "Special",
+        image: "/images/logo.jpg",
+        available: true,
+        styles: ["iced"],
+        addons: [
+          { id: "extra-shot-0", name: "Extra Shot", price: 30, qtyEnabled: true },
+        ],
       });
 
       const { data: row } = await supabase
@@ -90,13 +88,14 @@ test.describe("menu/order option persistence", () => {
       expect(item?.addons?.[0].price).toBe(30);
 
       // Edit: change the add-on config and confirm it updates without duplication.
-      await updateStore((store) => {
-        const target = store.menu.find((entry) => entry.id === id)!;
-        target.addons = [
+      const current = (await getFreshStore()).menu.find((entry) => entry.id === id)!;
+      await upsertMenuItemRecord({
+        ...current,
+        addons: [
           { id: "extra-shot-0", name: "Extra Shot", price: 30, qtyEnabled: true },
           { id: "oat-milk-1", name: "Oat Milk", price: 20, qtyEnabled: false },
-        ];
-        target.styles = ["hot"];
+        ],
+        styles: ["hot"],
       });
       const afterEdit = await getFreshStore();
       const edited = afterEdit.menu.find((entry) => entry.id === id);

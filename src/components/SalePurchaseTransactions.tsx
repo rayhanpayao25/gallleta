@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createRestock, deleteAdminRecord, deleteRestock, saveAdminData } from "@/actions/pos";
-import { costingIngredientForItem, cupsFromQuantity, formatQty, ingredientsForOrderLine, looksLikeCupItem, namesMatch, perCupAmount, remainingForUsages, roundQty, stockLedgerForRange } from "@/lib/inventory";
+import { costingIngredientForItem, cupsFromQuantity, formatQty, ingredientsForOrderLine, itemNameEquals, looksLikeCupItem, matchesInventoryRow, perCupAmount, remainingForUsages, roundQty, stockLedgerForRange } from "@/lib/inventory";
 import { phDateString, phDateTimeLabel, phIsoFromDate, phPeriodBounds, type PeriodRange } from "@/lib/datetime";
 import { isFoodOrPastry, orderSoldAsLabel, orderSoldAsLines, orderSoldAsParts } from "@/lib/menu";
 import type { Order, RecipeIngredient, StoreData } from "@/lib/types";
@@ -200,8 +200,11 @@ type StockItem = {
 
 type RestockRecord = {
   id: string;
+  inventoryItemId?: string;
   itemName: string;
   quantityAdded: number;
+  purchaseQty?: number;
+  purchaseUnit?: string;
   date: string;
 };
 
@@ -214,6 +217,7 @@ type RestockRecord = {
 type UsageRecord = {
   id: string;
   orderId?: string;
+  inventoryItemId?: string;
   date: string;
   itemName: string;
   usedAmount: number;
@@ -296,6 +300,7 @@ export function SalePurchaseTransactions({
     .flatMap((order) => order.items.flatMap((line) => ingredientsForOrderLine(store, line).map((ingredient, ingredientIndex) => ({
       id: `${order.id}-${line.productId}-${ingredientIndex}`,
       orderId: order.id,
+      inventoryItemId: ingredient.inventoryItemId && ingredient.inventoryItemId !== "other" ? ingredient.inventoryItemId : undefined,
       date: order.createdAt,
       itemName: ingredient.name,
       usedAmount: roundQty(Number(ingredient.amount) * line.qty),
@@ -575,7 +580,7 @@ export function SalePurchaseTransactions({
 
     for (const ingredient of configuredIngredients) {
       const existingIndex = nextStocks.findIndex((item) =>
-        namesMatch(item.name, ingredient.name)
+        itemNameEquals(item.name, ingredient.name)
       );
 
       const amountPerCup = Number(ingredient.amount);
@@ -623,7 +628,7 @@ export function SalePurchaseTransactions({
 
   const handleTotalUsedChange = (itemName: string, value: string) => {
     const nextTotal = Math.max(0, Number(value) || 0);
-    const stockIndex = stocks.findIndex((item) => namesMatch(item.name, itemName));
+    const stockIndex = stocks.findIndex((item) => itemNameEquals(item.name, itemName));
     if (stockIndex >= 0) {
       const nextStocks = stocks.map((item, index) =>
         index === stockIndex ? { ...item, cupUsageAmount: nextTotal || undefined } : item,
@@ -632,12 +637,12 @@ export function SalePurchaseTransactions({
       void persistInventory(nextStocks);
     }
     setUsages((currentUsages) => {
-      const matching = currentUsages.filter((usage) => namesMatch(usage.itemName, itemName) && phDateString(usage.date) === getTodayDate());
+      const matching = currentUsages.filter((usage) => itemNameEquals(usage.itemName, itemName) && phDateString(usage.date) === getTodayDate());
       const next = (() => {
         if (matching.length === 0) {
           return nextTotal === 0
             ? currentUsages
-            : [{ id: Date.now().toString(), date: getTodayDate(), itemName, usedAmount: nextTotal, unit: stocks.find((item) => namesMatch(item.name, itemName))?.unit || "units", remaining: stocks.find((item) => namesMatch(item.name, itemName))?.stock ?? 0, soldAs: "" }, ...currentUsages];
+            : [{ id: Date.now().toString(), date: getTodayDate(), itemName, usedAmount: nextTotal, unit: stocks.find((item) => itemNameEquals(item.name, itemName))?.unit || "units", remaining: stocks.find((item) => itemNameEquals(item.name, itemName))?.stock ?? 0, soldAs: "" }, ...currentUsages];
         }
         const firstId = matching[0].id;
         const otherUsageTotal = matching.slice(1).reduce((sum, usage) => sum + usage.usedAmount, 0);
@@ -652,6 +657,7 @@ export function SalePurchaseTransactions({
           id: entry.id,
           orderId: store.usageLogs.find((item) => item.id === entry.id)?.orderId || "",
           orderItemId: store.usageLogs.find((item) => item.id === entry.id)?.orderItemId || "",
+          inventoryItemId: entry.inventoryItemId ?? store.usageLogs.find((item) => item.id === entry.id)?.inventoryItemId,
           date: entry.date,
           itemName: entry.itemName,
           usedAmount: entry.usedAmount,
@@ -676,10 +682,10 @@ export function SalePurchaseTransactions({
     let nextUsages = [...currentUsages];
 
     if (type === "Sale") {
-      const costing = costings.find((c) => namesMatch(c.productName, productName));
+      const costing = costings.find((c) => itemNameEquals(c.productName, productName));
       if (costing) {
         for (const ing of costing.ingredients) {
-          const stockIndex = nextStocks.findIndex((s) => namesMatch(s.name, ing.name));
+          const stockIndex = nextStocks.findIndex((s) => itemNameEquals(s.name, ing.name));
           if (stockIndex === -1) continue;
           const totalUsed = roundQty(perCupAmount(ing) * quantity);
           if (totalUsed <= 0) continue;
@@ -691,7 +697,7 @@ export function SalePurchaseTransactions({
           if (isRevert) {
             const idx = nextUsages.findIndex(
               (usage) =>
-                namesMatch(usage.itemName, ing.name) &&
+                itemNameEquals(usage.itemName, ing.name) &&
                 usage.usedAmount === totalUsed &&
                 phDateString(usage.date) === phDateString(dateStr),
             );
@@ -713,7 +719,7 @@ export function SalePurchaseTransactions({
         }
       }
     } else if (type === "Purchase") {
-      const stockIndex = nextStocks.findIndex((s) => namesMatch(s.name, productName));
+      const stockIndex = nextStocks.findIndex((s) => itemNameEquals(s.name, productName));
       if (stockIndex !== -1) {
         nextStocks[stockIndex].stock = roundQty(
           isRevert
@@ -812,7 +818,11 @@ export function SalePurchaseTransactions({
       const nextStocks = stocks.map((s) =>
         s.id === editStockId ? { ...s, name: stockName.trim(), stock: toBaseQuantity({ purchaseUnitSize }, pieces), openingStock: toBaseQuantity({ purchaseUnitSize }, pieces), unit, purchaseUnitSize, cupUsageAmount, cupsMake } : s,
       );
-      const nextRestocks = restocks.filter((record) => !namesMatch(record.itemName, stockName));
+      const nextRestocks = restocks.filter((record) =>
+        record.inventoryItemId
+          ? record.inventoryItemId !== editStockId
+          : !itemNameEquals(record.itemName, stockName),
+      );
       setStocks(nextStocks);
       setRestocks(nextRestocks);
       await persistInventory(nextStocks);
@@ -909,8 +919,11 @@ export function SalePurchaseTransactions({
     const nextStocks = stocks.map((s) => s.id === item.id ? { ...s, stock: s.stock + addQty } : s);
     const newRestock: RestockRecord = {
       id: newRestockId,
+      inventoryItemId: item.id,
       itemName: item.name,
       quantityAdded: addQty,
+      purchaseQty: pieces,
+      purchaseUnit: "pcs",
       date: nowTime,
     };
 
@@ -923,7 +936,7 @@ export function SalePurchaseTransactions({
     try {
       // Ledger row + stock adjustment happen in one DB transaction so they
       // can never diverge (create_restock_atomic).
-      await createRestock({ id: newRestockId, inventoryItemId: item.id, itemNameSnapshot: item.name, quantityAdded: addQty, createdAt: nowTime });
+      await createRestock({ id: newRestockId, inventoryItemId: item.id, itemNameSnapshot: item.name, quantityAdded: addQty, createdAt: nowTime, purchaseQty: pieces, purchaseUnit: "pcs" });
     } catch (error) {
       setStocks(previousStocks);
       setRestocks(previousRestocks);
@@ -938,7 +951,10 @@ export function SalePurchaseTransactions({
     const record = restocks.find((item) => item.id === id);
     if (record) {
       const nextStocks = stocks.map((item) =>
-        namesMatch(item.name, record.itemName)
+        matchesInventoryRow(
+          { itemName: record.itemName, inventoryItemId: record.inventoryItemId },
+          { name: item.name, inventoryItemId: item.id },
+        )
           ? { ...item, stock: Math.max(0, item.stock - record.quantityAdded) }
           : item,
       );
@@ -1467,7 +1483,7 @@ export function SalePurchaseTransactions({
               {stocks
                 .filter((item) => looksLikeCupItem(item, recipeCostings))
                 .reduce((total, cupItem) => {
-                  const ledger = stockLedgerForRange({ itemName: cupItem.name, liveStock: cupItem.stock, from: rangeStart, to: rangeEnd, restocks, usages });
+                  const ledger = stockLedgerForRange({ itemName: cupItem.name, inventoryItemId: cupItem.id, liveStock: cupItem.stock, from: rangeStart, to: rangeEnd, restocks, usages });
                   return total + Number(ledger.used || 0);
                 }, 0)
                 .toFixed(2)} cups
@@ -1530,6 +1546,7 @@ export function SalePurchaseTransactions({
                 {stocks.map((s) => {
                   const { opening, restocked, used, remaining } = stockLedgerForRange({
                     itemName: s.name,
+                    inventoryItemId: s.id,
                     liveStock: s.stock,
                     from: rangeStart,
                     to: rangeEnd,
@@ -1665,14 +1682,14 @@ export function SalePurchaseTransactions({
                     <td className="p-3 border-r border-neutral-200 text-neutral-600 font-medium">{phDateTimeLabel(r.date)}</td>
                     <td className="p-3 border-r border-neutral-200 font-medium">{r.itemName}</td>
                     <td className="p-3 border-r border-neutral-200 text-right font-bold text-black">
-                      {/* quantity_added is stored in the item's base unit
-                          (ml/g/pcs); restock history shows the purchased piece
-                          count, so convert back via purchaseUnitSize (defaults
-                          to 1 when unset - right for pcs items and for rows
-                          whose item no longer exists). */}
-                      +{formatQty(toPieceQuantity(stocks.find((item) => namesMatch(item.name, r.itemName)) ?? {}, r.quantityAdded))}
+                      {/* New rows persist the purchase-facing entry
+                          (purchaseQty/purchaseUnit) so history shows exactly
+                          what was entered even if the item's config changes
+                          later. Legacy rows fall back to converting
+                          quantity_added (base units) via purchaseUnitSize. */}
+                      +{formatQty(r.purchaseQty ?? toPieceQuantity(stocks.find((item) => matchesInventoryRow({ itemName: r.itemName, inventoryItemId: r.inventoryItemId }, { name: item.name, inventoryItemId: item.id })) ?? {}, r.quantityAdded))}
                     </td>
-                    <td className="p-3 border-r border-neutral-200 text-neutral-600">pcs</td>
+                    <td className="p-3 border-r border-neutral-200 text-neutral-600">{r.purchaseUnit ?? "pcs"}</td>
                     <td className="p-3 text-center">
                       <RowActions
                         deleteLabel={`Delete restock ${r.itemName}`}
@@ -1765,12 +1782,12 @@ export function SalePurchaseTransactions({
               <tbody>
                 {costings.map((c) => {
                   const ing = c.ingredients[0];
-                  const stock = stocks.find((item) => namesMatch(item.name, c.productName) || (ing ? namesMatch(item.name, ing.name) : false));
+                  const stock = stocks.find((item) => itemNameEquals(item.name, c.productName) || (ing ? itemNameEquals(item.name, ing.name) : false));
                   const remaining = stock?.stock ?? 0;
                   const used = hasTransactionsInRange
                     ? usages
                         .filter((entry) => inDateRange(entry.date))
-                        .filter((entry) => namesMatch(entry.itemName, c.productName) || (ing ? namesMatch(entry.itemName, ing.name) : false))
+                        .filter((entry) => itemNameEquals(entry.itemName, c.productName) || (ing ? itemNameEquals(entry.itemName, ing.name) : false))
                         .reduce((sum, entry) => sum + entry.usedAmount, 0)
                     : 0;
                   const perCup = ing ? perCupAmount(ing) : 0;

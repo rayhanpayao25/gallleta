@@ -7,9 +7,12 @@ import type { DrinkStyle, MenuAddon } from "@/lib/types";
 import {
   deleteMenuCategoryRecord,
   deleteMenuItemRecord,
+  getFreshStore,
   getStore,
+  insertMenuCategoryRecord,
   renameMenuCategoryAtomic,
-  updateStore,
+  setMenuItemAvailableRecord,
+  upsertMenuItemRecord,
   uploadPublicMenuPhoto,
 } from "@/lib/store";
 
@@ -125,18 +128,8 @@ export async function addMenuCategory(name: string) {
     return { error: "Enter a category name." };
   }
 
-  let error: string | undefined;
-  await updateStore((store) => {
-    const exists = store.categories.some(
-      (entry) => entry.toLowerCase() === category.toLowerCase(),
-    );
-    if (exists) {
-      error = "That category is already on the board.";
-      return;
-    }
-    store.categories.push(category);
-  });
-  if (error) return { error };
+  const result = await insertMenuCategoryRecord(category);
+  if (!result.ok) return { error: result.error };
   refresh();
   return { ok: true };
 }
@@ -212,20 +205,15 @@ export async function createMenuItem(formData: FormData) {
     if ("src" in saved && saved.src) image = saved.src;
   }
 
-  await updateStore((store) => {
-    if (!store.categories.some((entry) => entry.toLowerCase() === category.toLowerCase())) {
-      store.categories.push(category);
-    }
-    store.menu.push({
-      id,
-      name,
-      price: Math.round(price),
-      category,
-      image,
-      available,
-      styles: stylesFromForm(formData, category),
-      addons: addonsFromForm(formData),
-    });
+  await upsertMenuItemRecord({
+    id,
+    name,
+    price: Math.round(price),
+    category,
+    image,
+    available,
+    styles: stylesFromForm(formData, category),
+    addons: addonsFromForm(formData),
   });
   refresh();
   return { ok: true };
@@ -255,39 +243,29 @@ export async function updateMenuItem(formData: FormData) {
     if ("src" in saved) uploaded = saved.src;
   }
 
-  let error: string | undefined;
-  await updateStore((store) => {
-    const item = store.menu.find((entry) => entry.id === id);
-    if (!item) {
-      error = "Item not found.";
-      return;
-    }
-    item.name = name;
-    item.price = Math.round(price);
-    item.category = category;
-    item.available = available;
-    item.styles = stylesFromForm(formData, category);
-    item.addons = addonsFromForm(formData);
-    if (uploaded) {
-      item.image = uploaded;
-    } else if (!isSafeImage(item.image)) {
-      item.image = "/images/logo.jpg";
-    }
-    if (!store.categories.some((entry) => entry.toLowerCase() === category.toLowerCase())) {
-      store.categories.push(category);
-    }
+  // Fresh read for the existence check: updating an item that was just
+  // deleted on another instance must not re-insert it.
+  const store = await getFreshStore();
+  const existing = store.menu.find((entry) => entry.id === id);
+  if (!existing) return { error: "Item not found." };
+
+  await upsertMenuItemRecord({
+    ...existing,
+    name,
+    price: Math.round(price),
+    category,
+    available,
+    styles: stylesFromForm(formData, category),
+    addons: addonsFromForm(formData),
+    image: uploaded ?? (isSafeImage(existing.image) ? existing.image : "/images/logo.jpg"),
   });
-  if (error) return { error };
   refresh();
   return { ok: true };
 }
 
 export async function setMenuItemAvailable(id: string, available: boolean) {
   await requireAdmin();
-  await updateStore((store) => {
-    const item = store.menu.find((entry) => entry.id === id);
-    if (item) item.available = available;
-  });
+  await setMenuItemAvailableRecord(id, available);
   refresh();
   return { ok: true };
 }
