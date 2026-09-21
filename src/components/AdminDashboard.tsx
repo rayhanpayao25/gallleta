@@ -334,7 +334,6 @@ export function AdminDashboard({ store }: { store: StoreData }) {
   
   const categories = categorySales(drinkProductStats(productStatsList)).filter((item) => item.qty > 0);
   
-  // Custom mapping para siguraduhing ang bibilangin ay ang total item quantity sa halip na order count lang
   const rawHours = salesByHour(filteredOrdersList, now, rangeType === "week" && activeFilterMode === "range" ? 7 : 1);
   const updatedHoursMap = rawHours.map(slot => {
     const slotOrders = filteredOrdersList.filter(o => {
@@ -346,7 +345,7 @@ export function AdminDashboard({ store }: { store: StoreData }) {
     }, 0);
     return {
       ...slot,
-      orders: totalQtyInHour, // Ginagamit na natin ang actual item quantity
+      orders: totalQtyInHour,
     };
   });
 
@@ -533,6 +532,14 @@ export function AdminDashboard({ store }: { store: StoreData }) {
               className="min-w-0 flex-1 bg-transparent text-sm outline-none cursor-pointer"
             />
           </div>
+
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="rounded-lg bg-black px-4 py-2 text-xs font-medium text-white transition hover:bg-neutral-800 shadow-sm"
+          >
+            Download PDF Sales
+          </button>
 
           <p
             className={`w-fit rounded-full px-4 py-2 text-sm ${

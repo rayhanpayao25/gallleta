@@ -185,6 +185,7 @@ export function PosClient({
     item: MenuItem;
     style?: DrinkStyle;
     addons: Record<string, number>;
+    qty?: number;
   } | null>(null);
   const [pending, startTransition] = useTransition();
   const labelPrinter = useLabelPrinter();
@@ -488,7 +489,7 @@ export function PosClient({
     setDrinkPick(null);
   }
 
-  function handleMenuTap(item: MenuItem) {
+ function handleMenuTap(item: MenuItem) {
     const styles = normalizeMenuStyles(item);
     const addons = normalizeMenuAddons(item);
     if (styles.length > 1 || addons.length > 0) {
@@ -496,6 +497,7 @@ export function PosClient({
         item,
         style: styles.length === 1 ? styles[0] : undefined,
         addons: {},
+        qty: 1, // <--- I-initialize dito
       });
       return;
     }
@@ -1026,10 +1028,6 @@ export function PosClient({
                         type="button"
                         onClick={() => {
                           const next = { ...drinkPick, style };
-                          if (normalizeMenuAddons(drinkPick.item).length === 0) {
-                            confirmDrinkPick(next);
-                            return;
-                          }
                           setDrinkPick(next);
                         }}
                         className={`rounded-2xl border px-4 py-4 text-sm font-medium ${
@@ -1046,6 +1044,41 @@ export function PosClient({
               ) : (
                 <p className="mt-1 text-sm text-neutral-500">Add extras if you want them.</p>
               )}
+
+              {/* Quantity Selector para sa Item */}
+              <div className="mt-5 flex items-center justify-between rounded-2xl border border-neutral-200 px-4 py-3">
+                <span className="text-sm font-medium text-neutral-700">Quantity</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDrinkPick({
+                        ...drinkPick,
+                        qty: Math.max(1, (drinkPick.qty ?? 1) - 1),
+                      })
+                    }
+                    className="flex h-8 w-8 items-center justify-center rounded-full border border-neutral-300 text-sm hover:border-black"
+                  >
+                    −
+                  </button>
+                  <span className="w-6 text-center text-sm font-medium">
+                    {drinkPick.qty ?? 1}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDrinkPick({
+                        ...drinkPick,
+                        qty: Math.min(99, (drinkPick.qty ?? 1) + 1),
+                      })
+                    }
+                    className="flex h-8 w-8 items-center justify-center rounded-full border border-neutral-300 text-sm hover:border-black"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+
               {normalizeMenuAddons(drinkPick.item).length > 0 ? (
                 <div className="mt-5 space-y-2">
                   <p className="text-sm text-neutral-500">Add-ons</p>
@@ -1125,18 +1158,31 @@ export function PosClient({
                       </button>
                     );
                   })}
-                  <button
-                    type="button"
-                    disabled={
-                      normalizeMenuStyles(drinkPick.item).length > 1 && !drinkPick.style
-                    }
-                    onClick={() => confirmDrinkPick(drinkPick)}
-                    className="mt-2 w-full rounded-2xl bg-black px-4 py-3 text-sm font-medium text-white disabled:opacity-40"
-                  >
-                    Add to checkout
-                  </button>
                 </div>
               ) : null}
+
+              <button
+                type="button"
+                disabled={
+                  normalizeMenuStyles(drinkPick.item).length > 1 && !drinkPick.style
+                }
+                onClick={() => {
+                  const q = drinkPick.qty ?? 1;
+                  for (let i = 0; i < q; i++) {
+                    addItem(
+                      drinkPick.item.id,
+                      drinkPick.item.name,
+                      drinkPick.item.price,
+                      drinkPick.style,
+                      selectedAddonsFor(drinkPick.item, drinkPick.addons)
+                    );
+                  }
+                  setDrinkPick(null);
+                }}
+                className="mt-5 w-full rounded-2xl bg-black px-4 py-3 text-sm font-medium text-white disabled:opacity-40"
+              >
+                Add to checkout
+              </button>
             </div>
           </div>
         ) : null}
