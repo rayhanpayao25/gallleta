@@ -52,6 +52,12 @@ export function UserManager({ users, session, loginActivity, offRequests, loginG
   const [offReason, setOffReason] = useState("");
   const [adminGate, setAdminGate] = useState(loginGates.admin);
   const [cashierGate, setCashierGate] = useState(loginGates.cashier);
+  
+  // Global filter/display date state for In / Out
+  const [selectedDate, setSelectedDate] = useState(phDateString());
+
+  // Global filter/display date state for Request off
+  const [offSelectedDate, setOffSelectedDate] = useState(phDateString());
 
   const uniqueUsers = useMemo(
     () => Array.from(new Map(users.map((user) => [user.id, user])).values()),
@@ -59,11 +65,27 @@ export function UserManager({ users, session, loginActivity, offRequests, loginG
   );
   const editing = uniqueUsers.find((user) => user.id === editingId) ?? null;
   const floorStaff = uniqueUsers.filter((user) => user.role !== "admin");
-  const sessions = useMemo(() => pairLoginSessions(loginActivity), [loginActivity]);
-  const requests = useMemo(
-    () => [...offRequests].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)),
-    [offRequests],
-  );
+  const allSessions = useMemo(() => pairLoginSessions(loginActivity), [loginActivity]);
+
+  // Filter sessions based on selectedDate
+  const sessions = useMemo(() => {
+    if (!selectedDate) return allSessions;
+    return allSessions.filter((row) => {
+      const loginDateStr = row.loginAt ? new Date(row.loginAt).toISOString().split("T")[0] : "";
+      const logoutDateStr = row.logoutAt ? new Date(row.logoutAt).toISOString().split("T")[0] : "";
+      return loginDateStr === selectedDate || logoutDateStr === selectedDate;
+    });
+  }, [allSessions, selectedDate]);
+
+  // Filter off requests based on offSelectedDate
+  const requests = useMemo(() => {
+    const sorted = [...offRequests].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+    if (!offSelectedDate) return sorted;
+    return sorted.filter((req) => {
+      const reqDateStr = req.date ? new Date(req.date).toISOString().split("T")[0] : "";
+      return reqDateStr === offSelectedDate;
+    });
+  }, [offRequests, offSelectedDate]);
 
   function startCreate() {
     setEditingId("new");
@@ -109,29 +131,31 @@ export function UserManager({ users, session, loginActivity, offRequests, loginG
 
   return (
     <div className="min-h-screen min-w-0 space-y-6 rounded-none border-0 border-neutral-300 bg-white p-3 sm:rounded-xl sm:border sm:p-6">
-      <div className="flex gap-2 overflow-x-auto border-b border-neutral-400 pb-3">
-        {(
-          [
-            { id: "staff", label: "Staff" },
-            { id: "inout", label: "In / Out" },
-            { id: "off", label: "Request off" },
-            { id: "gates", label: "Login links" },
-          ] as const
-        ).map((entry) => (
-          <button
-            key={entry.id}
-            type="button"
-            onClick={() => {
-              setTab(entry.id);
-              setNotice(null);
-            }}
-            className={`shrink-0 px-4 py-1.5 rounded text-xs font-bold transition shadow-sm uppercase ${
-              tab === entry.id ? "bg-black text-white" : "bg-white text-neutral-700 hover:bg-neutral-100"
-            }`}
-          >
-            {entry.label}
-          </button>
-        ))}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-neutral-400 pb-3">
+        <div className="flex gap-2 overflow-x-auto">
+          {(
+            [
+              { id: "staff", label: "Staff" },
+              { id: "inout", label: "In / Out" },
+              { id: "off", label: "Request off" },
+              { id: "gates", label: "Login links" },
+            ] as const
+          ).map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              onClick={() => {
+                setTab(entry.id);
+                setNotice(null);
+              }}
+              className={`shrink-0 px-4 py-1.5 rounded text-xs font-bold transition shadow-sm uppercase ${
+                tab === entry.id ? "bg-black text-white" : "bg-white text-neutral-700 hover:bg-neutral-100"
+              }`}
+            >
+              {entry.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="w-full space-y-5">
@@ -303,58 +327,85 @@ export function UserManager({ users, session, loginActivity, offRequests, loginG
 
         {tab === "inout" ? (
           <>
-            <h1 className="text-xl font-semibold tracking-tight">Staff in / out</h1>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <h1 className="text-xl font-semibold tracking-tight">Staff in / out</h1>
+
+              {/* Date Selector placed right next to Staff in / out heading */}
+              <div className="flex items-center self-start sm:self-auto rounded-xl border border-neutral-200 bg-white px-3.5 py-2 shadow-sm">
+                <div className="relative flex items-center gap-2 cursor-pointer">
+                  <span className="text-sm font-medium text-neutral-400 select-none">Date:</span>
+                  <input
+                    type="date"
+                    value={selectedDate}
+                    onChange={(event) => setSelectedDate(event.target.value)}
+                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                  />
+                  <span className="text-sm font-medium text-neutral-700 select-none">
+                    {selectedDate ? new Date(selectedDate).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }) : "Select date"}
+                  </span>
+                  <svg viewBox="0 0 24 24" className="h-4 w-4 text-neutral-500 ml-1 pointer-events-none" fill="none" stroke="currentColor">
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" strokeWidth="1.7" />
+                    <line x1="16" y1="2" x2="16" y2="6" strokeWidth="1.7" strokeLinecap="round" />
+                    <line x1="8" y1="2" x2="8" y2="6" strokeWidth="1.7" strokeLinecap="round" />
+                    <line x1="3" y1="10" x2="21" y2="10" strokeWidth="1.7" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+
             <form
-              className="flex flex-col gap-2 rounded-2xl border border-neutral-200 bg-white p-3 sm:flex-row sm:items-center"
+              className="flex flex-col gap-2 rounded-2xl border border-neutral-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between"
               onSubmit={(event) => event.preventDefault()}
             >
-              <select
-                value={punchUserId}
-                onChange={(event) => setPunchUserId(event.target.value)}
-                className={`${field} sm:max-w-xs`}
-              >
-                <option value="">Select staff</option>
-                {floorStaff.map((user) => (
-                  <option key={user.id} value={user.id}>
-                    {user.name}
-                  </option>
-                ))}
-              </select>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={pending || !punchUserId}
-                  onClick={() =>
-                    startTransition(async () => {
-                      const result = await punchStaff(punchUserId, "login");
-                      if (result && "error" in result && result.error) {
-                        setNotice(typeof result.error === "string" ? result.error : "Could not record.");
-                        return;
-                      }
-                      setNotice(null);
-                    })
-                  }
-                  className="rounded-full bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <select
+                  value={punchUserId}
+                  onChange={(event) => setPunchUserId(event.target.value)}
+                  className={`${field} sm:max-w-xs`}
                 >
-                  In
-                </button>
-                <button
-                  type="button"
-                  disabled={pending || !punchUserId}
-                  onClick={() =>
-                    startTransition(async () => {
-                      const result = await punchStaff(punchUserId, "logout");
-                      if (result && "error" in result && result.error) {
-                        setNotice(typeof result.error === "string" ? result.error : "Could not record.");
-                        return;
-                      }
-                      setNotice(null);
-                    })
-                  }
-                  className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium hover:border-black disabled:opacity-40"
-                >
-                  Out
-                </button>
+                  <option value="">Select staff</option>
+                  {floorStaff.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={pending || !punchUserId}
+                    onClick={() =>
+                      startTransition(async () => {
+                        const result = await punchStaff(punchUserId, "login");
+                        if (result && "error" in result && result.error) {
+                          setNotice(typeof result.error === "string" ? result.error : "Could not record.");
+                          return;
+                        }
+                        setNotice(null);
+                      })
+                    }
+                    className="rounded-full bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+                  >
+                    In
+                  </button>
+                  <button
+                    type="button"
+                    disabled={pending || !punchUserId}
+                    onClick={() =>
+                      startTransition(async () => {
+                        const result = await punchStaff(punchUserId, "logout");
+                        if (result && "error" in result && result.error) {
+                          setNotice(typeof result.error === "string" ? result.error : "Could not record.");
+                          return;
+                        }
+                        setNotice(null);
+                      })
+                    }
+                    className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium hover:border-black disabled:opacity-40"
+                  >
+                    Out
+                  </button>
+                </div>
               </div>
             </form>
             <div className="overflow-x-auto rounded-2xl border border-neutral-200 bg-white">
@@ -371,7 +422,7 @@ export function UserManager({ users, session, loginActivity, offRequests, loginG
                   {sessions.length === 0 ? (
                     <tr>
                       <td colSpan={4} className="px-4 py-8 text-center text-sm text-neutral-400">
-                        No in / out records yet.
+                        No in / out records for this date.
                       </td>
                     </tr>
                   ) : (
@@ -492,7 +543,32 @@ export function UserManager({ users, session, loginActivity, offRequests, loginG
 
         {tab === "off" ? (
           <>
-            <h1 className="text-xl font-semibold tracking-tight">Request off</h1>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <h1 className="text-xl font-semibold tracking-tight">Request off</h1>
+              
+              {/* Date Selector for Request off matching In / Out style */}
+              <div className="flex items-center self-start sm:self-auto rounded-xl border border-neutral-200 bg-white px-3.5 py-2 shadow-sm">
+                <div className="relative flex items-center gap-2 cursor-pointer">
+                  <span className="text-sm font-medium text-neutral-400 select-none">Date:</span>
+                  <input
+                    type="date"
+                    value={offSelectedDate}
+                    onChange={(event) => setOffSelectedDate(event.target.value)}
+                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                  />
+                  <span className="text-sm font-medium text-neutral-700 select-none">
+                    {offSelectedDate ? new Date(offSelectedDate).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }) : "Select date"}
+                  </span>
+                  <svg viewBox="0 0 24 24" className="h-4 w-4 text-neutral-500 ml-1 pointer-events-none" fill="none" stroke="currentColor">
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" strokeWidth="1.7" />
+                    <line x1="16" y1="2" x2="16" y2="6" strokeWidth="1.7" strokeLinecap="round" />
+                    <line x1="8" y1="2" x2="8" y2="6" strokeWidth="1.7" strokeLinecap="round" />
+                    <line x1="3" y1="10" x2="21" y2="10" strokeWidth="1.7" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+
             <form
               className="grid gap-3 rounded-2xl border border-neutral-200 bg-white p-4 sm:grid-cols-4 sm:items-end"
               onSubmit={(event) => {
@@ -550,7 +626,7 @@ export function UserManager({ users, session, loginActivity, offRequests, loginG
                   {requests.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="px-4 py-8 text-center text-sm text-neutral-400">
-                        No off requests yet.
+                        No off requests for this date.
                       </td>
                     </tr>
                   ) : (
@@ -666,5 +742,3 @@ export function UserManager({ users, session, loginActivity, offRequests, loginG
     </div>
   );
 }
-
-
