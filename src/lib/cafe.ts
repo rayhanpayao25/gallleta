@@ -1,7 +1,7 @@
 export const CAFE = {
   name: "COFFEE ZZ",
   tagline: "ICED DRINKS AND MORE",
-  hours: "9:00AM - 10:00PM",
+  hours: "1:00PM - 11:00PM",
   hoursNote: "DAILY",
   street: "Suterville",
   city: "Zamboanga City, Philippines",
