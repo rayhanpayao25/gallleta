@@ -83,7 +83,7 @@ export function LandingPage({
             </p>
           </div>
           <p className="mt-2 text-[10px] tracking-[0.22em] text-white/65 uppercase sm:text-[11px] sm:tracking-[0.38em]">
-            Suterville · Zamboanga City
+           Mango Drive, Suterville · Zamboanga City
           </p>
         </div>
       </section>

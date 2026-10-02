@@ -3,7 +3,7 @@ export const CAFE = {
   tagline: "ICED DRINKS AND MORE",
   hours: "1:00PM - 11:00PM",
   hoursNote: "DAILY",
-  street: "Suterville",
+  street: "Mango Drive, Suterville",
   city: "Zamboanga City, Philippines",
   phone: "+63 912 345 6789",
   phoneHref: "tel:+639123456789",

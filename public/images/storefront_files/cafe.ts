@@ -1,9 +1,9 @@
 export const CAFE = {
   name: "COFFEE ZZ",
   tagline: "WE GATHER, OVER COFFEE",
-  hours: "9:00AM - 10:00PM",
+  hours: "1:00PM - 11:00PM",
   hoursNote: "DAILY",
-  street: "Suterville",
+  street: "Mango Drive, Suterville",
   city: "Zamboanga City, Philippines",
   phone: "+63 912 345 6789",
   phoneHref: "tel:+639123456789",
