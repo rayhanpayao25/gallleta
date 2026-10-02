@@ -4,7 +4,7 @@ import { SiteNav } from "@/components/SiteNav";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SocialLinks } from "@/components/SocialLinks";
 import { CAFE } from "@/lib/cafe";
-import { DEFAULT_MENU, formatMoney } from "@/lib/menu";
+import { DEFAULT_MENU, formatMoney, normalizeMenuSizes } from "@/lib/menu";
 import type { MenuItem } from "@/lib/types";
 
 function Eyebrow({ children }: { children: string }) {
@@ -56,7 +56,7 @@ export function LandingPage({
       <section className="relative min-h-svh overflow-hidden">
         <Image
           src="/images/hero-wide.jpg"
-          alt="commune cafe bar"
+          alt="Coffee ZZ cafe bar"
           fill
           loading="eager"
           quality={95}
@@ -70,7 +70,7 @@ export function LandingPage({
             have a seat, take a sip
           </p>
           <h1 className="font-display mt-3 max-w-5xl text-[2.7rem] leading-[0.9] tracking-[0.08em] text-white uppercase drop-shadow-[0_10px_30px_rgba(0,0,0,0.65)] sm:mt-5 sm:text-7xl sm:tracking-[0.12em] md:text-8xl">
-            We commune,
+            We gather,
             <br />
             over coffee
           </h1>
@@ -83,7 +83,7 @@ export function LandingPage({
             </p>
           </div>
           <p className="mt-2 text-[10px] tracking-[0.22em] text-white/65 uppercase sm:text-[11px] sm:tracking-[0.38em]">
-            Tetuan · Zamboanga City
+            Suterville · Zamboanga City
           </p>
         </div>
       </section>
@@ -110,7 +110,7 @@ export function LandingPage({
           </article>
           <Photo
             src="/images/drinks.jpg"
-            alt="Signature iced drinks at commune"
+            alt="Signature iced drinks at Coffee ZZ"
             className="min-h-[240px] sm:min-h-[360px] md:col-span-5 md:min-h-[640px]"
             sizes="(max-width: 768px) 100vw, 42vw"
           />
@@ -125,7 +125,7 @@ export function LandingPage({
         <div className="mx-auto grid max-w-6xl gap-3 sm:gap-4 md:grid-cols-2">
           <Photo
             src="/images/cups.jpg"
-            alt="Iced latte and matcha at commune"
+            alt="Iced latte and matcha at Coffee ZZ"
             className="min-h-[260px] sm:min-h-[440px] md:min-h-[520px]"
             sizes="(max-width: 768px) 100vw, 50vw"
           />
@@ -158,7 +158,7 @@ export function LandingPage({
           <div>
             <Eyebrow>Best Sellers</Eyebrow>
             <h2 className="mt-4 font-serif text-4xl italic sm:text-5xl">
-              We commune, over coffee
+              We gather, over coffee
             </h2>
             <p className="mt-4 max-w-md text-neutral-400">
               Signatures from the bar: iced, crumbled, and pulled to share.
@@ -168,14 +168,21 @@ export function LandingPage({
               {bestSellers.map((item) => (
                 <li
                   key={item.id}
-                  className="flex items-baseline justify-between gap-3 py-4 sm:gap-6"
+                  className="flex items-start justify-between gap-3 py-4 sm:gap-6"
                 >
                   <div>
                     <p className="font-medium tracking-wide text-white">{item.name}</p>
                   </div>
-                  <p className="shrink-0 font-medium text-neutral-300">
-                    {formatMoney(item.price)}
-                  </p>
+                  <div className="grid shrink-0 grid-cols-2 gap-x-4 gap-y-1 text-right">
+                    {normalizeMenuSizes(item.sizes).length > 0
+                      ? normalizeMenuSizes(item.sizes).map((size) => (
+                          <div key={size.label}>
+                            <p className="text-[10px] uppercase tracking-wider text-neutral-500">{size.label}</p>
+                            <p className="font-medium text-neutral-200">{formatMoney(size.price)}</p>
+                          </div>
+                        ))
+                      : <p className="font-medium text-neutral-200">{formatMoney(item.price)}</p>}
+                  </div>
                 </li>
               ))}
             </ul>
@@ -185,7 +192,7 @@ export function LandingPage({
     href="/drinks"
     className="inline-flex items-center justify-center rounded-full bg-white px-7 py-3.5 text-xs font-semibold uppercase tracking-[0.22em] text-black transition hover:bg-neutral-200"
   >
-    View Commune Drinks
+    View Coffee ZZ Drinks
   </Link>
   <a
     href="https://taximaxim.onelink.me/KKXl?pid=refferalmztall&af_dp=maximzakaz%3A%2F%2F&af_web_dp=https%3A%2F%2Ftaximaxim.com%2Fapp&c=menumzt"
@@ -211,7 +218,7 @@ export function LandingPage({
         <div className="mx-auto grid max-w-6xl items-center gap-8 lg:grid-cols-2 lg:gap-12">
           <Photo
             src="/images/storefront.jpg"
-            alt="commune cafe storefront at night"
+            alt="Coffee ZZ cafe storefront at night"
             className="min-h-[280px] sm:min-h-[480px] lg:min-h-[620px]"
             sizes="(max-width: 1024px) 100vw, 50vw"
           />
@@ -230,7 +237,7 @@ export function LandingPage({
             </p>
             <p className="mt-8 text-base leading-7 text-neutral-300 sm:text-lg sm:leading-8">
               Every cup tells a story, and every sip brings us closer together. A
-              quiet industrial house in Tetuan. Matcha umami, sea salt cream,
+              quiet industrial house in Suterville. Matcha umami, sea salt cream,
               panini, and a table meant to be shared.
             </p>
           </div>
@@ -260,9 +267,6 @@ export function LandingPage({
                 className="mt-6 block text-lg leading-relaxed text-white transition hover:text-neutral-300 sm:text-xl"
               >
                 {CAFE.street}
-                <span className="mt-2 block text-base text-neutral-400">
-                  ({CAFE.landmark})
-                </span>
                 <span className="mt-2 block text-base text-neutral-300">
                   {CAFE.city}
                 </span>
@@ -294,14 +298,14 @@ export function LandingPage({
           </div>
           <Photo
             src="/images/open-now.jpg"
-            alt="We're open now at commune"
+            alt="We're open now at Coffee ZZ"
             loading="eager"
             className="min-h-[220px] sm:min-h-[360px] lg:col-span-4 lg:min-h-[560px]"
             sizes="(max-width: 1024px) 100vw, 33vw"
           />
           <Photo
             src="/images/collage.jpg"
-            alt="commune cafe moments"
+            alt="Coffee ZZ cafe moments"
             className="min-h-[220px] sm:min-h-[360px] lg:col-span-3 lg:min-h-[560px]"
             sizes="(max-width: 1024px) 100vw, 25vw"
           />
@@ -329,7 +333,7 @@ export function LandingPage({
         </div>
         <div className="relative h-[260px] overflow-hidden border-t border-white/10 sm:h-[380px] lg:h-[460px]">
           <iframe
-            title="Commune Cafe on Google Maps"
+            title="Coffee ZZ on Google Maps"
             src={CAFE.mapsEmbed}
             loading="lazy"
             referrerPolicy="no-referrer-when-downgrade"

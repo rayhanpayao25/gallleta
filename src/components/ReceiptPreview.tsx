@@ -114,12 +114,6 @@ function CustomerSlip({ ticket }: { ticket: ReceiptTicket }) {
       ))}
       <Rule />
       <Row left="Subtotal" right={receiptMoney(ticket.subtotal)} />
-      {ticket.discount > 0 ? (
-        <Row
-          left={ticket.promoLabel ?? "Discount"}
-          right={`-${receiptMoney(ticket.discount)}`}
-        />
-      ) : null}
       <Row left="TOTAL" right={receiptMoney(ticket.total)} strong />
       <Rule />
       <Row left="Payment" right={paymentLabel(ticket.paymentMethod)} />
@@ -150,9 +144,7 @@ function JobRow({
       ? "bg-emerald-100 text-emerald-800"
       : job.status === "failed"
         ? "bg-red-100 text-red-800"
-        : job.status === "cancelled"
-          ? "bg-neutral-200 text-neutral-500"
-          : "bg-amber-100 text-amber-800";
+        : "bg-amber-100 text-amber-800";
   const title =
     job.type === "customer-receipt"
       ? "Customer receipt"

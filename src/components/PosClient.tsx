@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { logout } from "@/actions/auth";
 import { punchBaristaShift } from "@/actions/users";
@@ -8,13 +8,8 @@ import {
   beginPrintJob,
   createOrder,
   finishPrintJob,
-  getVoidRequestStatus,
   openPos,
   queueReprintJobs,
-  requestVoidApproval,
-  verifyManager,
-  voidCheckout,
-  voidOrder,
 } from "@/actions/pos";
 import { ReceiptPreview } from "@/components/ReceiptPreview";
 import {
@@ -28,7 +23,9 @@ import {
   drinkDisplayName,
   drinkStyleLabel,
   formatMoney,
+  menuSizePrice,
   normalizeMenuAddons,
+  normalizeMenuSizes,
   normalizeMenuStyles,
   orderLineListLabel,
   orderLineOptionsLabel,
@@ -52,10 +49,8 @@ import type {
   PrintJob,
   PrintJobType,
   PosState,
-  Promotion,
   Session,
   StoreData,
-  VoidRequest,
 } from "@/lib/types";
 
 type PosClientProps = {
@@ -63,11 +58,9 @@ type PosClientProps = {
   pos: PosState;
   menu: MenuItem[];
   categories: string[];
-  promotions: Promotion[];
   orders: Order[];
   clockedInBaristas: { id: string; name: string; username: string }[];
   printJobs: PrintJob[];
-  voidRequests: VoidRequest[];
   inventoryStore: Pick<
     StoreData,
     | "orders"
@@ -84,17 +77,14 @@ type PosClientProps = {
 type PosPanel = "pos" | Extract<InventoryTab, "stock" | "restock">;
 
 const CASH_PRESETS = [500, 1000, 2000];
-const CHECKOUT_KEY = "commune_pos_checkout";
+const CHECKOUT_KEY = "coffeezz_pos_checkout";
 const TEST_PRINTER_ENABLED = process.env.NEXT_PUBLIC_TEST_PRINTER === "true";
-const PROMOTIONS_ENABLED = false;
 
 type SavedCheckout = {
   userId: string;
   cart: OrderItem[];
   tendered: string;
   paymentMethod: PaymentMethod;
-  promoId: string | null;
-  voidRequestId: string | null;
 };
 
 function readCheckout(userId: string, menu: MenuItem[]): SavedCheckout | null {
@@ -110,6 +100,8 @@ function readCheckout(userId: string, menu: MenuItem[]): SavedCheckout | null {
       if (!product || product.available === false) return [];
       const qty = Math.floor(Number(item.qty));
       if (!Number.isFinite(qty) || qty < 1) return [];
+      const sizes = normalizeMenuSizes(product.sizes);
+      const selectedSize = sizes.find((size) => size.label === item.size) ?? sizes[0];
       const style = item.style === "hot" || item.style === "iced" ? item.style : undefined;
       const addons = resolveOrderAddons(product, item.addons);
       return [
@@ -117,7 +109,8 @@ function readCheckout(userId: string, menu: MenuItem[]): SavedCheckout | null {
           productId: product.id,
           name: product.name,
           qty,
-          price: product.price,
+          price: selectedSize?.price ?? product.price,
+          size: selectedSize?.label,
           style,
           addons,
         },
@@ -129,9 +122,6 @@ function readCheckout(userId: string, menu: MenuItem[]): SavedCheckout | null {
       cart,
       tendered: typeof saved.tendered === "string" ? saved.tendered : "",
       paymentMethod: parsePayment(saved.paymentMethod),
-      promoId: typeof saved.promoId === "string" ? saved.promoId : null,
-      voidRequestId:
-        typeof saved.voidRequestId === "string" ? saved.voidRequestId : null,
     };
   } catch {
     return null;
@@ -147,11 +137,9 @@ export function PosClient({
   pos,
   menu,
   categories,
-  promotions,
   orders,
   clockedInBaristas,
   printJobs,
-  voidRequests,
   inventoryStore,
 }: PosClientProps) {
   const router = useRouter();
@@ -160,18 +148,7 @@ export function PosClient({
   const [category, setCategory] = useState("All");
   const [tendered, setTendered] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
-  const [voidModalOpen, setVoidModalOpen] = useState(false);
-  const [voidUsername, setVoidUsername] = useState("");
-  const [voidPassword, setVoidPassword] = useState("");
-  const [voidReason, setVoidReason] = useState("");
-  const [voidTargetId, setVoidTargetId] = useState<string | null>(null);
-  const [voidSearch, setVoidSearch] = useState("");
-  const [voidTodayOnly, setVoidTodayOnly] = useState(true);
-  const [activeVoidRequestId, setActiveVoidRequestId] = useState<string | null>(null);
-  const [promoOpen, setPromoOpen] = useState(false);
-  const [promoId, setPromoId] = useState<string | null>(null);
   const [printOrderId, setPrintOrderId] = useState<string | null>(null);
-  const [lastTicket, setLastTicket] = useState<ReceiptTicket | null>(null);
   const [lastOrderId, setLastOrderId] = useState<string | null>(null);
   const [lastOrder, setLastOrder] = useState<Order | null>(null);
   const [localPrintJobs, setLocalPrintJobs] = useState<PrintJob[]>([]);
@@ -184,6 +161,7 @@ export function PosClient({
   const [drinkPick, setDrinkPick] = useState<{
     item: MenuItem;
     style?: DrinkStyle;
+    size?: string;
     addons: Record<string, number>;
     qty?: number;
   } | null>(null);
@@ -193,18 +171,11 @@ export function PosClient({
   const [checkoutReady, setCheckoutReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [activePanel, setActivePanel] = useState<PosPanel>("pos");
-  const activePromos = PROMOTIONS_ENABLED
-    ? promotions.filter((item) => item.active)
-    : [];
-  const appliedPromoId = PROMOTIONS_ENABLED ? promoId : null;
+  const [managerSearch, setManagerSearch] = useState("");
+  const [managerTodayOnly, setManagerTodayOnly] = useState(true);
   const availableOrders = useMemo(() => {
-    const byId = new Map(
-      orders.filter((order) => !order.voided).map((order) => [order.id, order]),
-    );
-    const lastOrderVoided = Boolean(
-      lastOrder && orders.some((order) => order.id === lastOrder.id && order.voided),
-    );
-    if (lastOrder && !lastOrder.voided && !lastOrderVoided) {
+    const byId = new Map(orders.map((order) => [order.id, order]));
+    if (lastOrder) {
       byId.set(lastOrder.id, lastOrder);
     }
     return [...byId.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -275,8 +246,6 @@ export function PosClient({
         setCart(saved.cart);
         setTendered(saved.tendered);
         setPaymentMethod(saved.paymentMethod);
-        setPromoId(PROMOTIONS_ENABLED ? saved.promoId : null);
-        setActiveVoidRequestId(saved.voidRequestId);
       }
       setCheckoutReady(true);
     });
@@ -292,10 +261,8 @@ export function PosClient({
       cart,
       tendered,
       paymentMethod,
-      promoId: appliedPromoId,
-      voidRequestId: activeVoidRequestId,
     });
-  }, [checkoutReady, session.userId, cart, tendered, paymentMethod, appliedPromoId, activeVoidRequestId]);
+  }, [checkoutReady, session.userId, cart, tendered, paymentMethod]);
 
   useEffect(() => {
     document.body.style.overflow = menuOpen ? "hidden" : "";
@@ -313,141 +280,34 @@ export function PosClient({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [menuOpen]);
 
-  useEffect(() => {
-    if (
-      !promoId ||
-      (PROMOTIONS_ENABLED &&
-        promotions.some((item) => item.id === promoId && item.active))
-    ) {
-      return;
-    }
-    let cancelled = false;
-    Promise.resolve().then(() => {
-      if (!cancelled) setPromoId(null);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [promoId, promotions]);
-
   const subtotal = cart.reduce((sum, item) => sum + cartLineUnitPrice(item) * item.qty, 0);
-  const promo = activePromos.find((item) => item.id === promoId) ?? null;
-  const discount = promo
-    ? promo.type === "percent"
-      ? Math.round((subtotal * promo.value) / 100)
-      : Math.min(subtotal, promo.value)
-    : 0;
-  const total = Math.max(0, subtotal - discount);
+  const total = subtotal;
   const isCash = paymentMethod === "cash";
   const paid = isCash ? Number(tendered) || 0 : total;
   const change = isCash && paid >= total ? paid - total : 0;
   const isManager = session.role === "manager";
-  const voidTickets = useMemo(() => {
-    const needle = voidSearch.trim().toLowerCase();
+  const canCharge =
+    !isManager &&
+    pos.isOpen &&
+    cart.length > 0 &&
+    (!isCash || paid >= total);
+  const managerOrders = useMemo(() => {
+    const needle = managerSearch.trim().toLowerCase();
     const today = phDateString();
     return [...orders]
-      .filter((order) => !order.voided)
-      .filter((order) => !voidTodayOnly || phDateString(order.createdAt) === today)
+      .filter((order) => !managerTodayOnly || phDateString(order.createdAt) === today)
       .filter((order) => {
         if (!needle) return true;
-        const haystack = [
+        const text = [
           String(order.ticketNo ?? ""),
           order.baristaName,
           formatMoney(order.total),
           ...order.items.map((item) => `${item.qty} ${orderLineListLabel(item)}`),
-        ]
-          .join(" ")
-          .toLowerCase();
-        return haystack.includes(needle);
+        ].join(" ").toLowerCase();
+        return text.includes(needle);
       })
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }, [orders, voidSearch, voidTodayOnly]);
-  const selectedVoidOrder = orders.find((order) => order.id === voidTargetId);
-  const cashierPaidVoid = !isManager && cart.length === 0 ? lastOrderId : null;
-  const activeVoidRequest = voidRequests.find(
-    (request) => request.id === activeVoidRequestId,
-  );
-  const voidRequestPending =
-    Boolean(activeVoidRequestId) && activeVoidRequest?.status !== "approved";
-  const canCharge =
-    !isManager &&
-    !voidRequestPending &&
-    pos.isOpen &&
-    cart.length > 0 &&
-    (!isCash || paid >= total);
-  const appliedVoidRequestId = useRef<string | null>(null);
-  const lastOrderIdRef = useRef(lastOrderId);
-  lastOrderIdRef.current = lastOrderId;
-  const lastOrderRef = useRef(lastOrder);
-  lastOrderRef.current = lastOrder;
-
-  function applyApprovedVoid(
-    requestId: string,
-    request: {
-      orderId?: string | null;
-      processedOrderId?: string | null;
-    },
-  ) {
-    if (appliedVoidRequestId.current === requestId) return;
-    appliedVoidRequestId.current = requestId;
-    const voidedId = request.orderId ?? request.processedOrderId ?? null;
-    if (
-      voidedId &&
-      (lastOrderIdRef.current === voidedId || lastOrderRef.current?.id === voidedId)
-    ) {
-      setLastOrderId(null);
-      setLastTicket(null);
-      setLastOrder(null);
-    }
-    if (!request.orderId) {
-      setCart([]);
-      setTendered("");
-      setPaymentMethod("cash");
-      setPromoId(null);
-      setPromoOpen(false);
-    }
-    setActiveVoidRequestId(null);
-    setVoidTargetId(null);
-    setVoidReason("");
-    setMessage("Admin approved the void. The checkout has been voided.");
-    router.refresh();
-  }
-
-  useEffect(() => {
-    if (!lastOrderId) return;
-    const serverOrder = orders.find((order) => order.id === lastOrderId);
-    if (!serverOrder?.voided) return;
-    setLastOrderId(null);
-    setLastTicket(null);
-    setLastOrder(null);
-    if (printOrderId === lastOrderId) setPrintOrderId(null);
-  }, [lastOrderId, orders, printOrderId]);
-
-  useEffect(() => {
-    if (!activeVoidRequestId) return;
-    const requestId: string = activeVoidRequestId;
-    if (activeVoidRequest?.status === "approved") {
-      applyApprovedVoid(requestId, activeVoidRequest);
-      return;
-    }
-
-    let cancelled = false;
-    async function checkVoidRequest() {
-      const result = await getVoidRequestStatus(requestId);
-      if (cancelled || !result.found || result.status !== "approved") return;
-      applyApprovedVoid(requestId, result);
-    }
-
-    void checkVoidRequest();
-    const timer = window.setInterval(() => {
-      void checkVoidRequest();
-    }, 2000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [activeVoidRequest, activeVoidRequestId, router]);
-
+  }, [orders, managerSearch, managerTodayOnly]);
   function selectedAddonsFor(item: MenuItem, selected: Record<string, number>): OrderAddon[] {
     return resolveOrderAddons(
       item,
@@ -460,11 +320,18 @@ export function PosClient({
     );
   }
 
-  function addItem(id: string, name: string, price: number, style?: DrinkStyle, addons: OrderAddon[] = []) {
-    if (!pos.isOpen || isManager || voidRequestPending) {
+  function addItem(
+    id: string,
+    name: string,
+    price: number,
+    size?: string,
+    style?: DrinkStyle,
+    addons: OrderAddon[] = [],
+  ) {
+    if (!pos.isOpen || isManager) {
       return;
     }
-    const nextLine = { productId: id, name, qty: 1, price, style, addons };
+    const nextLine = { productId: id, name, qty: 1, price, size, style, addons };
     const nextKey = cartLineKey(nextLine);
     setCart((current) => {
       const existing = current.find((item) => cartLineKey(item) === nextKey);
@@ -478,152 +345,30 @@ export function PosClient({
     setMessage(null);
   }
 
-  function confirmDrinkPick(pick: { item: MenuItem; style?: DrinkStyle; addons: Record<string, number> }) {
-    addItem(
-      pick.item.id,
-      pick.item.name,
-      pick.item.price,
-      pick.style,
-      selectedAddonsFor(pick.item, pick.addons),
-    );
-    setDrinkPick(null);
-  }
-
  function handleMenuTap(item: MenuItem) {
     const styles = normalizeMenuStyles(item);
     const addons = normalizeMenuAddons(item);
-    if (styles.length > 1 || addons.length > 0) {
+    const sizes = normalizeMenuSizes(item.sizes);
+    if (sizes.length > 1 || styles.length > 1 || addons.length > 0) {
       setDrinkPick({
         item,
         style: styles.length === 1 ? styles[0] : undefined,
+        size: sizes.length === 1 ? sizes[0].label : undefined,
         addons: {},
-        qty: 1, // <--- I-initialize dito
+        qty: 1,
       });
       return;
     }
-    addItem(item.id, item.name, item.price, styles[0]);
+    addItem(
+      item.id,
+      item.name,
+      menuSizePrice(item, sizes[0]?.label),
+      sizes[0]?.label,
+      styles[0],
+    );
   }
 
-  function handleConfirmVoid(e: React.FormEvent) {
-    e.preventDefault();
-    if (!voidReason.trim()) {
-      setMessage("Enter a reason for voiding.");
-      return;
-    }
-
-    startTransition(async () => {
-      if (isManager) {
-        if (!voidTargetId) {
-          setMessage("Select a ticket to void.");
-          return;
-        }
-        const result = await voidOrder(voidTargetId, voidReason);
-        if ("error" in result && result.error) {
-          setMessage(result.error);
-          return;
-        }
-        setVoidReason("");
-        setVoidTargetId(null);
-        setVoidModalOpen(false);
-        setMessage("Transaction voided.");
-        return;
-      }
-
-      if (!voidUsername || !voidPassword) {
-        setMessage("Manager credentials required to void.");
-        return;
-      }
-      const auth = await verifyManager(voidUsername, voidPassword);
-      if ("error" in auth && auth.error) {
-        setMessage(auth.error);
-        return;
-      }
-
-      if (cart.length > 0) {
-        const result = await voidCheckout(
-          cart,
-          voidReason,
-          voidUsername,
-          voidPassword,
-          appliedPromoId,
-          paymentMethod,
-        );
-        if ("error" in result && result.error) {
-          setMessage(result.error);
-          return;
-        }
-        setCart([]);
-        setTendered("");
-        setPaymentMethod("cash");
-        setPromoId(null);
-        setPromoOpen(false);
-        setVoidUsername("");
-        setVoidPassword("");
-        setVoidReason("");
-        setVoidModalOpen(false);
-        setMessage("Checkout voided.");
-        return;
-      }
-
-      const targetId = voidTargetId || lastOrderId;
-      if (!targetId) {
-        setMessage("No ticket to void.");
-        return;
-      }
-      const result = await voidOrder(targetId, voidReason, voidUsername, voidPassword);
-      if ("error" in result && result.error) {
-        setMessage(result.error);
-        return;
-      }
-      setCart([]);
-      setTendered("");
-      setPaymentMethod("cash");
-      setPromoId(null);
-      setPromoOpen(false);
-      setLastOrderId(null);
-      setLastTicket(null);
-      setLastOrder(null);
-      setVoidUsername("");
-      setVoidPassword("");
-      setVoidReason("");
-      setVoidTargetId(null);
-      setVoidModalOpen(false);
-      setMessage("Transaction voided.");
-    });
-  }
-
-  function handleRequestVoid() {
-    if (!voidReason.trim()) {
-      setMessage("Enter a reason for voiding.");
-      return;
-    }
-    const targetId = voidTargetId || (cart.length === 0 ? lastOrderId : null);
-    if (cart.length === 0 && !targetId) {
-      setMessage("No items to void.");
-      return;
-    }
-
-    startTransition(async () => {
-      const result = await requestVoidApproval(
-        cart,
-        voidReason,
-        targetId,
-        appliedPromoId,
-        paymentMethod,
-      );
-      if (!result.requestId) {
-        setMessage(result.error ?? "Unable to send the void request.");
-        return;
-      }
-      setActiveVoidRequestId(result.requestId);
-      setVoidUsername("");
-      setVoidPassword("");
-      setVoidModalOpen(false);
-      setMessage("Void request sent to admin. Waiting for approval.");
-    });
-  }
-
-  const canPrint = Boolean(lastOrderId) && cart.length === 0 && !voidRequestPending;
+  const canPrint = Boolean(lastOrderId) && cart.length === 0;
 
   function printTicket() {
     if (!canPrint || !lastOrderId) {
@@ -783,9 +528,9 @@ export function PosClient({
               setActivePanel("pos");
               setMenuOpen(false);
             }}
-            className="text-base font-bold tracking-tight lowercase"
+            className="text-base font-bold tracking-tight"
           >
-            commune.
+            Coffee ZZ
           </button>
           {activePanel !== "pos" ? (
             <p className="truncate text-sm font-medium text-white/70">
@@ -819,9 +564,9 @@ export function PosClient({
                 setActivePanel("pos");
                 setMenuOpen(false);
               }}
-              className="text-sm font-semibold tracking-tight lowercase"
+              className="text-sm font-semibold tracking-tight"
             >
-              commune.
+              Coffee ZZ
             </button>
             <button
               type="button"
@@ -993,7 +738,7 @@ export function PosClient({
               disabled={pending}
               onClick={() => {
                 if (cart.length > 0) {
-                  setMessage("Finish or void the checkout before logging out.");
+                  setMessage("Finish checkout before logging out.");
                   setMenuOpen(false);
                   return;
                 }
@@ -1018,6 +763,28 @@ export function PosClient({
                 ×
               </button>
               <h2 className="text-xl font-semibold tracking-tight">{drinkPick.item.name}</h2>
+              {normalizeMenuSizes(drinkPick.item.sizes).length > 1 ? (
+                <>
+                  <p className="mt-1 text-sm text-neutral-500">Choose a size.</p>
+                  <div className="mt-4 grid grid-cols-2 gap-2">
+                    {normalizeMenuSizes(drinkPick.item.sizes).map((size) => (
+                      <button
+                        key={size.label}
+                        type="button"
+                        onClick={() => setDrinkPick({ ...drinkPick, size: size.label })}
+                        className={`rounded-2xl border px-4 py-3 text-sm font-medium ${
+                          drinkPick.size === size.label
+                            ? "border-black bg-black text-white"
+                            : "border-neutral-200 hover:border-black hover:bg-black hover:text-white"
+                        }`}
+                      >
+                        <span className="block">{size.label}</span>
+                        <span className="mt-1 block text-xs opacity-75">{formatMoney(size.price)}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : null}
               {normalizeMenuStyles(drinkPick.item).length > 1 ? (
                 <>
                   <p className="mt-1 text-sm text-neutral-500">Choose Iced or Hot.</p>
@@ -1164,7 +931,8 @@ export function PosClient({
               <button
                 type="button"
                 disabled={
-                  normalizeMenuStyles(drinkPick.item).length > 1 && !drinkPick.style
+                  (normalizeMenuSizes(drinkPick.item.sizes).length > 1 && !drinkPick.size) ||
+                  (normalizeMenuStyles(drinkPick.item).length > 1 && !drinkPick.style)
                 }
                 onClick={() => {
                   const q = drinkPick.qty ?? 1;
@@ -1172,7 +940,8 @@ export function PosClient({
                     addItem(
                       drinkPick.item.id,
                       drinkPick.item.name,
-                      drinkPick.item.price,
+                      menuSizePrice(drinkPick.item, drinkPick.size),
+                      drinkPick.size,
                       drinkPick.style,
                       selectedAddonsFor(drinkPick.item, drinkPick.addons)
                     );
@@ -1312,151 +1081,6 @@ export function PosClient({
           </div>
         ) : null}
 
-        {/* Void Modal */}
-        {voidModalOpen ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-            <form
-              onSubmit={handleConfirmVoid}
-              className="relative flex w-full max-w-md flex-col rounded-3xl bg-white p-6 shadow-2xl transition-all"
-            >
-              <button
-                type="button"
-                aria-label="Close modal"
-                onClick={() => setVoidModalOpen(false)}
-                className="absolute top-5 right-5 flex h-9 w-9 items-center justify-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-black transition"
-              >
-                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor">
-                  <path d="M6 6l12 12M18 6L6 18" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-              </button>
-
-              <div className="mb-6 text-center">
-                <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-2xl bg-neutral-100 text-neutral-800">
-                  <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor">
-                    <path
-                      d="M12 9v3.75m0 3.75h.008v.008H12v-.008zM12 3a9 9 0 100 18 9 9 0 000-18z"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </div>
-                <h2 className="text-xl font-bold tracking-tight text-neutral-900">
-                  {isManager ? "Void this ticket?" : "Void checkout"}
-                </h2>
-                <p className="mt-1 text-xs text-neutral-500">
-                  {isManager
-                    ? "This cannot be undone."
-                    : "Manager approval required to void."}
-                </p>
-              </div>
-
-              {selectedVoidOrder || (cashierPaidVoid && lastTicket) ? (
-                <div className="mb-4 rounded-2xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-left">
-                  {selectedVoidOrder ? (
-                    <>
-                      <div className="flex items-baseline justify-between gap-3">
-                        <p className="text-sm font-semibold">
-                          Ticket #{selectedVoidOrder.ticketNo ?? selectedVoidOrder.id.slice(-4)}
-                        </p>
-                        <p className="text-sm font-semibold">{formatMoney(selectedVoidOrder.total)}</p>
-                      </div>
-                      <p className="mt-1 text-xs text-neutral-500">
-                        {phDateTimeLabel(selectedVoidOrder.createdAt)} · {selectedVoidOrder.baristaName}
-                      </p>
-                      <p className="mt-2 text-xs text-neutral-700">
-                        {selectedVoidOrder.items.map((item) => `${item.qty}× ${orderLineListLabel(item)}`).join(", ")}
-                      </p>
-                    </>
-                  ) : lastTicket ? (
-                    <>
-                      <div className="flex items-baseline justify-between gap-3">
-                        <p className="text-sm font-semibold">Ticket #{lastTicket.ticketNo}</p>
-                        <p className="text-sm font-semibold">{formatMoney(lastTicket.total)}</p>
-                      </div>
-                      <p className="mt-2 text-xs text-neutral-700">
-                        {lastTicket.items.map((item) => `${item.qty}× ${orderLineListLabel(item)}`).join(", ")}
-                      </p>
-                    </>
-                  ) : null}
-                </div>
-              ) : null}
-
-              <div className="space-y-4">
-                {!isManager ? (
-                <div className="space-y-3">
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-neutral-700">
-                      Manager username
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Enter username"
-                      value={voidUsername}
-                      onChange={(e) => setVoidUsername(e.target.value)}
-                      className="w-full rounded-xl border border-neutral-200 bg-neutral-50 px-3.5 py-2.5 text-xs text-neutral-900 outline-none transition focus:border-black focus:bg-white focus:ring-1 focus:ring-black"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-neutral-700">
-                      Manager password
-                    </label>
-                    <input
-                      type="password"
-                      placeholder="••••••••"
-                      value={voidPassword}
-                      onChange={(e) => setVoidPassword(e.target.value)}
-                      className="w-full rounded-xl border border-neutral-200 bg-neutral-50 px-3.5 py-2.5 text-xs text-neutral-900 outline-none transition focus:border-black focus:bg-white focus:ring-1 focus:ring-black"
-                    />
-                  </div>
-                </div>
-                ) : null}
-
-                <div className="pt-1">
-                  <label className="mb-1 block text-xs font-semibold text-neutral-700">
-                    Reason for Voiding <span className="text-red-500">*</span>
-                  </label>
-                  <textarea
-                    rows={2}
-                    placeholder="e.g., Customer changed mind, wrong order input..."
-                    value={voidReason}
-                    onChange={(e) => setVoidReason(e.target.value)}
-                    className="w-full resize-none rounded-xl border border-neutral-200 bg-neutral-50 px-3.5 py-2.5 text-xs text-neutral-900 outline-none transition focus:border-black focus:bg-white focus:ring-1 focus:ring-black"
-                  />
-                </div>
-              </div>
-
-              <div className="mt-6 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setVoidModalOpen(false)}
-                  className="w-1/3 rounded-xl border border-neutral-200 py-2.5 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={pending || voidRequestPending}
-                  className="w-2/3 rounded-xl bg-black py-2.5 text-xs font-medium text-white transition hover:bg-neutral-800 active:scale-[0.99]"
-                >
-                  {isManager ? "Void ticket" : "Confirm Void"}
-                </button>
-              </div>
-              {!isManager ? (
-                <button
-                  type="button"
-                  disabled={pending || voidRequestPending}
-                  onClick={handleRequestVoid}
-                  className="mt-2 w-full rounded-xl border border-black py-2.5 text-xs font-medium text-black transition hover:bg-neutral-100 disabled:opacity-40"
-                >
-                  {voidRequestPending ? "Waiting for admin approval" : "Request to admin"}
-                </button>
-              ) : null}
-            </form>
-          </div>
-        ) : null}
-
         {selectedPrintTicket && selectedPrintOrder ? (
           <ReceiptPreview
             ticket={selectedPrintTicket}
@@ -1536,7 +1160,7 @@ export function PosClient({
             <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-neutral-100 px-6 text-center">
               <p className="font-serif text-4xl italic sm:text-5xl">Closed</p>
               <p className="mt-3 max-w-sm text-sm text-neutral-500">
-                Open the POS to {isManager ? "void tickets." : "take orders."}.
+                Open the POS to take orders.
               </p>
               <button
                 type="button"
@@ -1554,28 +1178,28 @@ export function PosClient({
               <div className="shrink-0 border-b border-neutral-200 bg-white px-4 py-4 sm:px-6">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                   <div>
-                    <h2 className="text-xl font-semibold tracking-tight">Void tickets</h2>
+                    <h2 className="text-xl font-semibold tracking-tight">Order history</h2>
                     <p className="mt-0.5 text-sm text-neutral-500">
-                      {voidTickets.length} open {voidTickets.length === 1 ? "ticket" : "tickets"}
-                      {voidTodayOnly ? " today" : ""}
+                      {managerOrders.length} {managerOrders.length === 1 ? "order" : "orders"}
+                      {managerTodayOnly ? " today" : ""}
                     </p>
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                     <div className="flex rounded-full border border-neutral-200 bg-neutral-50 p-1">
                       <button
                         type="button"
-                        onClick={() => setVoidTodayOnly(true)}
+                        onClick={() => setManagerTodayOnly(true)}
                         className={`rounded-full px-3 py-1.5 text-xs font-medium ${
-                          voidTodayOnly ? "bg-black text-white" : "text-neutral-600 hover:text-black"
+                          managerTodayOnly ? "bg-black text-white" : "text-neutral-600 hover:text-black"
                         }`}
                       >
                         Today
                       </button>
                       <button
                         type="button"
-                        onClick={() => setVoidTodayOnly(false)}
+                        onClick={() => setManagerTodayOnly(false)}
                         className={`rounded-full px-3 py-1.5 text-xs font-medium ${
-                          !voidTodayOnly ? "bg-black text-white" : "text-neutral-600 hover:text-black"
+                          !managerTodayOnly ? "bg-black text-white" : "text-neutral-600 hover:text-black"
                         }`}
                       >
                         All
@@ -1591,8 +1215,8 @@ export function PosClient({
                         <path d="M16 16l4 4" strokeWidth="1.6" />
                       </svg>
                       <input
-                        value={voidSearch}
-                        onChange={(event) => setVoidSearch(event.target.value)}
+                        value={managerSearch}
+                        onChange={(event) => setManagerSearch(event.target.value)}
                         placeholder="Search ticket, item, or cashier"
                         className="w-full rounded-full border border-neutral-300 bg-white py-2 pr-4 pl-10 text-sm outline-none placeholder:text-neutral-400 focus:border-black"
                       />
@@ -1603,14 +1227,14 @@ export function PosClient({
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
-                {voidTickets.length === 0 ? (
+                {managerOrders.length === 0 ? (
                   <div className="flex h-full min-h-[240px] items-center justify-center rounded-2xl border border-dashed border-neutral-300 bg-white text-sm text-neutral-400">
-                    No tickets to void.
+                    No orders found.
                   </div>
                 ) : (
                   <>
                     <div className="space-y-3 md:hidden">
-                      {voidTickets.map((order) => (
+                      {managerOrders.map((order) => (
                         <article key={order.id} className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
                           <div className="flex items-start justify-between gap-3">
                             <div>
@@ -1627,17 +1251,6 @@ export function PosClient({
                             {order.items.map((item) => `${item.qty}× ${orderLineListLabel(item)}`).join(", ")}
                           </p>
                           <p className="mt-1 text-xs text-neutral-400">{paymentLabel(order.paymentMethod)}</p>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setVoidTargetId(order.id);
-                              setVoidReason("");
-                              setVoidModalOpen(true);
-                            }}
-                            className="mt-3 w-full rounded-xl bg-black py-3 text-sm font-medium text-white hover:bg-neutral-800"
-                          >
-                            Void ticket
-                          </button>
                         </article>
                       ))}
                     </div>
@@ -1652,11 +1265,10 @@ export function PosClient({
                             <th className="px-4 py-3">Items</th>
                             <th className="px-4 py-3">Pay</th>
                             <th className="px-4 py-3 text-right">Total</th>
-                            <th className="px-4 py-3 text-right"> </th>
                           </tr>
                         </thead>
                         <tbody>
-                          {voidTickets.map((order) => (
+                          {managerOrders.map((order) => (
                             <tr key={order.id} className="border-t border-neutral-100 hover:bg-neutral-50">
                               <td className="px-4 py-4 font-semibold whitespace-nowrap">
                                 #{order.ticketNo ?? order.id.slice(-4)}
@@ -1673,19 +1285,6 @@ export function PosClient({
                               </td>
                               <td className="px-4 py-4 text-right font-semibold whitespace-nowrap">
                                 {formatMoney(order.total)}
-                              </td>
-                              <td className="px-4 py-4 text-right">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setVoidTargetId(order.id);
-                                    setVoidReason("");
-                                    setVoidModalOpen(true);
-                                  }}
-                                  className="rounded-full bg-black px-4 py-2 text-xs font-medium text-white hover:bg-neutral-800"
-                                >
-                                  Void
-                                </button>
                               </td>
                             </tr>
                           ))}
@@ -1731,7 +1330,7 @@ export function PosClient({
                       key={item.id}
                       type="button"
                       onClick={() => handleMenuTap(item)}
-                      disabled={isManager || voidRequestPending}
+                      disabled={isManager}
                       className="rounded-2xl border border-neutral-300 bg-white p-3 text-center transition hover:border-black disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <p className="text-xs font-medium">{item.name}</p>
@@ -1743,9 +1342,16 @@ export function PosClient({
                       ) : normalizeMenuAddons(item).length > 0 ? (
                         <p className="mt-0.5 text-[10px] text-neutral-400">Add-ons</p>
                       ) : null}
-                      <p className="mt-0.5 text-xs text-neutral-600">
-                        {formatMoney(item.price)}
-                      </p>
+                      <div className={`mt-1 grid gap-1 ${normalizeMenuSizes(item.sizes).length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
+                        {normalizeMenuSizes(item.sizes).length > 0
+                          ? normalizeMenuSizes(item.sizes).map((size) => (
+                              <span key={size.label} className="rounded-lg bg-neutral-100 px-1 py-1 text-[10px] leading-tight text-neutral-600">
+                                <span className="block text-[9px] text-neutral-400">{size.label}</span>
+                                <span className="font-medium text-neutral-800">{formatMoney(size.price)}</span>
+                              </span>
+                            ))
+                          : <span className="text-xs text-neutral-600">{formatMoney(item.price)}</span>}
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -1877,12 +1483,6 @@ export function PosClient({
                 <span className="text-neutral-500">Subtotal</span>
                 <span>{formatMoney(subtotal)}</span>
               </div>
-              {discount > 0 && promo ? (
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-neutral-500">{promo.label}</span>
-                  <span>−{formatMoney(discount)}</span>
-                </div>
-              ) : null}
               <div className="flex items-center justify-between text-xs">
                 <span className="text-neutral-500">Total</span>
                 <span className="text-base font-semibold">{formatMoney(total)}</span>
@@ -1892,51 +1492,7 @@ export function PosClient({
                 <span>{formatMoney(isCash ? change : total)}</span>
               </div>
 
-              {PROMOTIONS_ENABLED && promoOpen ? (
-                <div className="grid grid-cols-2 gap-1.5">
-                  {activePromos.length === 0 ? (
-                    <p className="col-span-2 text-center text-[11px] text-neutral-500">
-                      No active promotions.
-                    </p>
-                  ) : (
-                    activePromos.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() =>
-                          setPromoId((current) => (current === item.id ? null : item.id))
-                        }
-                        className={`rounded-lg border px-2 py-1 text-[11px] transition ${
-                          promoId === item.id
-                            ? "border-black bg-black text-white"
-                            : "border-neutral-300 bg-white hover:border-black"
-                        }`}
-                      >
-                        {item.label}
-                      </button>
-                    ))
-                  )}
-                </div>
-              ) : null}
-
-              <div
-                className={`grid gap-1.5 pt-1 ${
-                  PROMOTIONS_ENABLED ? "grid-cols-3" : "grid-cols-2"
-                }`}
-              >
-                {PROMOTIONS_ENABLED ? (
-                  <button
-                    type="button"
-                    onClick={() => setPromoOpen((value) => !value)}
-                    className={`rounded-lg border py-2 text-xs transition ${
-                      promoId
-                        ? "border-black bg-black text-white"
-                        : "border-neutral-300 hover:border-black"
-                    }`}
-                  >
-                    Promotions
-                  </button>
-                ) : null}
+              <div className="grid grid-cols-1 gap-1.5 pt-1">
                 <button
                   type="button"
                   onClick={printTicket}
@@ -1949,17 +1505,6 @@ export function PosClient({
                 >
                   Print
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setVoidTargetId(cart.length === 0 ? lastOrderId : null);
-                    setVoidModalOpen(true);
-                  }}
-                  disabled={voidRequestPending || (cart.length === 0 && !lastOrderId)}
-                  className="rounded-lg border border-neutral-300 py-2 text-xs hover:border-black disabled:opacity-40 transition"
-                >
-                  Void
-                </button>
               </div>
 
               <button
@@ -1967,31 +1512,18 @@ export function PosClient({
                 disabled={pending || !canCharge}
                 onClick={() =>
                   startTransition(async () => {
-                    const result = await createOrder(
-                      cart,
-                      appliedPromoId,
-                      paymentMethod,
-                      paid,
-                    );
+                    const result = await createOrder(cart, paymentMethod, paid);
                     if (!result.ok) {
                       setMessage(result.error);
                       return;
                     }
                     const savedOrder = result.order;
-                    const saved = receiptFromOrder(
-                      savedOrder,
-                      [savedOrder, ...availableOrders],
-                      menu,
-                    );
-                    setLastTicket(saved);
                     setLastOrder(savedOrder);
                     setLastOrderId(savedOrder.id);
                     upsertPrintJobs(result.printJobs);
                     setCart([]);
                     setTendered("");
                     setPaymentMethod("cash");
-                    setPromoId(null);
-                    setPromoOpen(false);
                     setMessage(
                       `Paid ${formatMoney(result.total ?? 0)}. Tap Print for labels and receipt.`,
                     );
@@ -2018,11 +1550,6 @@ export function PosClient({
 
               {message ? (
                 <p className="text-center text-xs text-neutral-500">{message}</p>
-              ) : null}
-              {voidRequestPending ? (
-                <p className="rounded-lg border border-neutral-300 bg-neutral-50 px-3 py-2 text-center text-xs font-medium text-neutral-700">
-                  Void request pending admin approval
-                </p>
               ) : null}
             </div>
           </aside>

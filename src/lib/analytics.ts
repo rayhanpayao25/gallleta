@@ -34,24 +34,19 @@ function startOfDayPH(date: Date): Date {
   return new Date(`${phDateStr}T00:00:00+08:00`);
 }
 
-export function liveOrders(orders: Order[]): Order[] {
-  return orders.filter((order) => !order.voided);
-}
-
 export function sumSales(orders: Order[]): number {
-  return liveOrders(orders).reduce((sum, order) => sum + order.total, 0);
+  return orders.reduce((sum, order) => sum + order.total, 0);
 }
 
 export function averageTicket(orders: Order[]): number {
-  const live = liveOrders(orders);
-  if (live.length === 0) return 0;
-  return sumSales(live) / live.length;
+  if (orders.length === 0) return 0;
+  return sumSales(orders) / orders.length;
 }
 
 export function ordersOnDay(orders: Order[], day: Date): Order[] {
   const start = startOfDayPH(day).getTime();
   const end = start + 24 * 60 * 60 * 1000;
-  return liveOrders(orders).filter((order) => {
+  return orders.filter((order) => {
     const time = new Date(order.createdAt).getTime();
     return time >= start && time < end;
   });
@@ -83,7 +78,7 @@ export function salesByYearMonths(orders: Order[], targetYear?: number) {
     const monthEnd = new Date(Date.UTC(yearNum, monthIndex + 1, 0, 23, 59, 59));
     monthEnd.setHours(monthEnd.getHours() - 8);
 
-    const monthOrders = liveOrders(orders).filter((order) => {
+    const monthOrders = orders.filter((order) => {
       const time = new Date(order.createdAt).getTime();
       return time >= monthStart.getTime() && time <= monthEnd.getTime();
     });
@@ -124,7 +119,7 @@ export function productStats(
     });
   }
 
-  for (const order of liveOrders(orders)) {
+  for (const order of orders) {
     for (const line of order.items) {
       const matchingMenuItem = map.get(line.productId) ?? menu.find((item) => item.name.trim().toLowerCase() === line.name.trim().toLowerCase());
       const current = map.get(line.productId) ?? {
@@ -218,7 +213,7 @@ export function salesByHour(orders: Order[], now = new Date(), days = 7) {
     };
   });
 
-  for (const order of liveOrders(orders)) {
+  for (const order of orders) {
     const time = new Date(order.createdAt);
     if (time.getTime() < start.getTime()) continue;
     
@@ -242,10 +237,6 @@ export function changePercent(current: number, previous: number): number | null 
   return Math.round(((current - previous) / previous) * 100);
 }
 
-export function totalDiscount(orders: Order[]): number {
-  return liveOrders(orders).reduce((sum, order) => sum + (order.discount ?? 0), 0);
-}
-
 export function paymentStats(orders: Order[]) {
   const buckets: Record<
     PaymentMethod,
@@ -255,28 +246,12 @@ export function paymentStats(orders: Order[]) {
     gcash: { method: "gcash", label: paymentLabel("gcash"), count: 0, sales: 0 },
     maya: { method: "maya", label: paymentLabel("maya"), count: 0, sales: 0 },
   };
-  for (const order of liveOrders(orders)) {
+  for (const order of orders) {
     const method = parsePayment(order.paymentMethod);
     buckets[method].count += 1;
     buckets[method].sales += order.total;
   }
   return PAYMENT_METHODS.map((item) => buckets[item.id]);
-}
-
-export function promoStats(orders: Order[]) {
-  const map = new Map<string, { label: string; count: number; discount: number }>();
-  for (const order of liveOrders(orders)) {
-    if (!order.promoLabel || !order.discount) continue;
-    const current = map.get(order.promoLabel) ?? {
-      label: order.promoLabel,
-      count: 0,
-      discount: 0,
-    };
-    current.count += 1;
-    current.discount += order.discount;
-    map.set(order.promoLabel, current);
-  }
-  return [...map.values()].sort((a, b) => b.count - a.count);
 }
 
 export function busiestDay(days: ReturnType<typeof lastNDays>) {

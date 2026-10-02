@@ -3,7 +3,7 @@ import { supabaseTestClient, e2eId } from "../e2e/utils";
 
 // DB-side ticket allocation: create_order_atomic now issues ticket numbers
 // from public.ticket_counters (one row per Asia/Manila day) instead of trusting
-// caller input, and can persist voided_by/voided_at on already-voided orders.
+// caller input.
 // These tests hit the live Supabase project via the service client - no
 // browser. Every row uses an e2e-* id and is cleaned up regardless of
 // pass/fail. The counter row itself is left: it tracks issued tickets for the
@@ -27,9 +27,6 @@ async function createOrderRpc(
     id?: string;
     ticketNo?: string;
     createdAt?: string;
-    voided?: boolean;
-    voidReason?: string;
-    voidedBy?: string;
     total?: number;
   } = {},
 ) {
@@ -44,32 +41,22 @@ async function createOrderRpc(
       { productId: "e2e-ticket-item", name: "E2E Ticket Item", qty: 1, price: total },
     ],
     p_subtotal: total,
-    p_discount: 0,
-    p_promo_id: null,
-    p_promo_label: null,
     p_total: total,
     p_payment_method: "cash",
     p_ticket_no: overrides.ticketNo ?? null,
     p_paid: total,
     p_change: 0,
     p_deductions: [],
-    p_voided: overrides.voided ?? false,
-    p_void_reason: overrides.voidReason ?? null,
-    p_voided_by: overrides.voidedBy ?? null,
   });
   return { data, error, orderId };
 }
 
 test.describe("atomic ticket allocation", () => {
   const orderIds: string[] = [];
-  const requestIds: string[] = [];
   const counterDays = new Set<string>();
 
   test.afterEach(async () => {
     const supabase = supabaseTestClient();
-    for (const requestId of requestIds.splice(0)) {
-      await supabase.from("void_requests").delete().eq("id", requestId);
-    }
     for (const orderId of orderIds.splice(0)) {
       await supabase.rpc("delete_order_atomic", { p_order_id: orderId });
     }
@@ -132,7 +119,7 @@ test.describe("atomic ticket allocation", () => {
     expect(sorted[2] - sorted[1]).toBe(1);
   });
 
-  test("allocation never collides with existing same-day orders incl. voided", async () => {
+  test("allocation never collides with existing same-day orders", async () => {
     const supabase = supabaseTestClient();
     const todayPH = new Intl.DateTimeFormat("en-CA", {
       timeZone: "Asia/Manila",
@@ -155,138 +142,6 @@ test.describe("atomic ticket allocation", () => {
       .gte("created_at", start)
       .lt("created_at", end);
     expect(holders?.map((o) => o.id)).toEqual([r.orderId]);
-  });
-
-  test("voiding an order never frees its ticket number", async () => {
-    const supabase = supabaseTestClient();
-    const first = await createOrderRpc(supabase);
-    expect(first.error).toBeNull();
-    orderIds.push(first.orderId);
-    const freed = first.data.ticketNo as string;
-
-    const { error: voidError } = await supabase.rpc("void_order_atomic", {
-      p_order_id: first.orderId,
-      p_reason: "e2e ticket void-no-reuse",
-      p_voided_by: "admin-1",
-    });
-    expect(voidError).toBeNull();
-
-    const { data: voided } = await supabase
-      .from("orders")
-      .select("voided, voided_by, voided_at")
-      .eq("id", first.orderId)
-      .single();
-    expect(voided?.voided).toBe(true);
-    expect(voided?.voided_by).toBe("admin-1");
-    expect(voided?.voided_at).toBeTruthy();
-
-    const next = await createOrderRpc(supabase);
-    expect(next.error).toBeNull();
-    orderIds.push(next.orderId);
-    expect(next.data.ticketNo).not.toBe(freed);
-    expect(Number(next.data.ticketNo)).toBeGreaterThan(Number(freed));
-  });
-
-  test("pre-voided create (voidCheckout path) sets voided_by + voided_at + allocated ticket", async () => {
-    const supabase = supabaseTestClient();
-    const manager = (
-      await supabase.from("staff_users").select("id").eq("username", "manager").single()
-    ).data;
-    expect(manager?.id, "seed manager account must exist").toBeTruthy();
-
-    const r = await createOrderRpc(supabase, {
-      voided: true,
-      voidReason: "e2e pre-checkout void",
-      voidedBy: manager!.id,
-      ticketNo: "777",
-    });
-    expect(r.error, r.error?.message).toBeNull();
-    orderIds.push(r.orderId);
-    expect(r.data.ticketNo).not.toBe("777");
-
-    const { data: order } = await supabase
-      .from("orders")
-      .select("voided, void_reason, voided_by, voided_at, ticket_no")
-      .eq("id", r.orderId)
-      .single();
-    expect(order?.voided).toBe(true);
-    expect(order?.void_reason).toBe("e2e pre-checkout void");
-    expect(order?.voided_by).toBe(manager!.id);
-    expect(order?.voided_at).toBeTruthy();
-    expect(order?.ticket_no).toBe(r.data.ticketNo);
-  });
-
-  test("voided_by rejects non-staff ids (FK enforced)", async () => {
-    const supabase = supabaseTestClient();
-    const r = await createOrderRpc(supabase, {
-      voided: true,
-      voidReason: "fk probe",
-      voidedBy: "not-a-staff-user",
-    });
-    expect(r.error?.message ?? "").toMatch(/voided_by|foreign key|violates/i);
-    if (!r.error) orderIds.push(r.orderId);
-  });
-
-  test("pre-checkout approval allocates the ticket at approval time", async () => {
-    const supabase = supabaseTestClient();
-    const staffId = e2eId("ticket-staff");
-    await supabase.from("staff_users").insert({
-      id: staffId,
-      username: staffId,
-      password: "e2e-placeholder",
-      name: "E2E Ticket Staff",
-      role: "barista",
-      title: "E2E",
-    });
-    const requestId = e2eId("ticket-vr");
-    const newOrderId = e2eId("ticket-approved");
-    requestIds.push(requestId);
-    orderIds.push(newOrderId);
-
-    try {
-      const { error: insertError } = await supabase.from("void_requests").insert({
-        id: requestId,
-        requested_at: new Date().toISOString(),
-        requested_by_id: staffId,
-        requested_by_name: "E2E Ticket Staff",
-        reason: "e2e ticket cart request",
-        status: "pending",
-        order_id: null,
-        items: [
-          { productId: "e2e-ticket-item", name: "E2E Ticket Item", qty: 1, price: 10 },
-        ],
-        subtotal: 10,
-        discount: 0,
-        promo_label: null,
-        total: 10,
-        payment_method: "cash",
-      });
-      expect(insertError).toBeNull();
-
-      const { data, error } = await supabase.rpc("approve_void_request_atomic", {
-        p_request_id: requestId,
-        p_approved_by_id: "admin-1",
-        p_approved_by_name: "E2E Admin",
-        p_new_order_id: newOrderId,
-        p_ticket_no: "888",
-      });
-      expect(error).toBeNull();
-      expect(data?.ok, JSON.stringify(data)).toBe(true);
-      expect(data?.processedOrderId).toBe(newOrderId);
-
-      const { data: order } = await supabase
-        .from("orders")
-        .select("voided, voided_by, voided_at, ticket_no")
-        .eq("id", newOrderId)
-        .single();
-      expect(order?.voided).toBe(true);
-      expect(order?.voided_by).toBe("admin-1");
-      expect(order?.voided_at).toBeTruthy();
-      expect(order?.ticket_no).toMatch(/^\d{3}$/);
-      expect(order?.ticket_no).not.toBe("888");
-    } finally {
-      await supabase.from("staff_users").delete().eq("id", staffId);
-    }
   });
 
   test("PH-day boundary allocates on a separate per-day counter", async () => {

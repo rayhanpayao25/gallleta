@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { drinkStyleLabelList, formatMoney } from "@/lib/menu";
+import { drinkStyleLabelList, formatMoney, normalizeMenuSizes } from "@/lib/menu";
 import type { MenuItem } from "@/lib/types";
 
 type DrinksMenuProps = {
@@ -11,7 +11,7 @@ type DrinksMenuProps = {
 
 function normalizeCat(name: string) {
   const trimmed = name.trim() || "Other";
-  return trimmed.replace(/^non[\s-]*coffee$/i, "Non-Coffee");
+  return trimmed.replace(/^non[\s-]*coffee$/i, "Non Coffee");
 }
 
 function orderedCategories(items: MenuItem[], preferred: string[]) {
@@ -111,27 +111,41 @@ export function DrinksMenu({ items, categories = [] }: DrinksMenuProps) {
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {drinks.map((item) => (
-                  <div
-                    key={item.id}
-                    className="group relative flex flex-col justify-between rounded-2xl border border-white/10 bg-neutral-900/50 p-5 transition duration-300 hover:border-white/30 hover:bg-neutral-900"
-                  >
-                    <h3 className="font-medium tracking-wide text-white text-base">
-                      {item.name}
-                    </h3>
-                    {drinkStyleLabelList(item) !== "—" ? (
-                      <p className="mt-2 text-[10px] uppercase tracking-[0.2em] text-neutral-500">
-                        {drinkStyleLabelList(item)}
-                      </p>
-                    ) : null}
-                    <div className="mt-6 flex items-center justify-between border-t border-white/5 pt-4">
-                      <span className="text-[10px] uppercase tracking-[0.2em] text-neutral-500">
-                        Available
-                      </span>
-                      <span className="font-semibold text-neutral-200">
-                        {formatMoney(item.price)}
-                      </span>
-                    </div>
-                  </div>
+                  (() => {
+                    const sizes = normalizeMenuSizes(item.sizes);
+                    return (
+                      <div
+                        key={item.id}
+                        className="group relative flex flex-col justify-between rounded-2xl border border-white/10 bg-neutral-900/50 p-5 transition duration-300 hover:border-white/30 hover:bg-neutral-900"
+                      >
+                        <h3 className="font-medium tracking-wide text-white text-base">
+                          {item.name}
+                        </h3>
+                        {drinkStyleLabelList(item) !== "—" ? (
+                          <p className="mt-2 text-[10px] uppercase tracking-[0.2em] text-neutral-500">
+                            {drinkStyleLabelList(item)}
+                          </p>
+                        ) : null}
+                        <div className={`mt-6 grid gap-2 border-t border-white/5 pt-4 ${sizes.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
+                          {sizes.length > 0 ? sizes.map((size) => (
+                            <div key={size.label} className="rounded-xl bg-white/[0.04] px-3 py-2">
+                              <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-neutral-500">
+                                {size.label}
+                              </p>
+                              <p className="mt-1 font-semibold text-neutral-100">
+                                {formatMoney(size.price)}
+                              </p>
+                            </div>
+                          )) : (
+                            <div className="rounded-xl bg-white/[0.04] px-3 py-2">
+                              <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-neutral-500">Price</p>
+                              <p className="mt-1 font-semibold text-neutral-100">{formatMoney(item.price)}</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()
                 ))}
               </div>
             </div>

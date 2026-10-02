@@ -203,13 +203,23 @@ export function costingIngredientForItem(
 
 type CupAssignment = Pick<
   RecipeCosting,
-  "hotCupInventoryItemId" | "icedCupInventoryItemId" | "otherCupInventoryItemId"
+  | "hotCupInventoryItemId"
+  | "icedCupInventoryItemId"
+  | "smallCupInventoryItemId"
+  | "largeCupInventoryItemId"
+  | "otherCupInventoryItemId"
 >;
 
 export function configuredCupIds(costings: CupAssignment[] | undefined) {
   const ids = new Set<string>();
   for (const costing of costings ?? []) {
-    for (const value of [costing.hotCupInventoryItemId, costing.icedCupInventoryItemId, costing.otherCupInventoryItemId]) {
+    for (const value of [
+      costing.hotCupInventoryItemId,
+      costing.icedCupInventoryItemId,
+      costing.smallCupInventoryItemId,
+      costing.largeCupInventoryItemId,
+      costing.otherCupInventoryItemId,
+    ]) {
       const id = String(value ?? "").trim();
       if (id) ids.add(id);
     }
@@ -229,13 +239,17 @@ export function cupForOrderLine(
   inventory: InventoryItem[],
   costing: CupAssignment | undefined,
   style?: DrinkStyle,
+  size?: string,
 ) {
-  const selectedId =
-    style === "hot"
-      ? costing?.hotCupInventoryItemId
-      : style === "iced"
-        ? costing?.icedCupInventoryItemId
-        : costing?.otherCupInventoryItemId;
+  const selectedId = size === "16oz"
+    ? costing?.smallCupInventoryItemId ?? costing?.icedCupInventoryItemId
+    : size === "22oz"
+      ? costing?.largeCupInventoryItemId ?? costing?.icedCupInventoryItemId
+      : style === "hot"
+        ? costing?.hotCupInventoryItemId
+        : style === "iced"
+          ? costing?.icedCupInventoryItemId
+          : costing?.otherCupInventoryItemId;
   const id = String(selectedId ?? "").trim();
   if (!id) return undefined;
   return inventory.find((item) => item.id === id);
@@ -304,7 +318,7 @@ export function ingredientsForOrderLine(
     : (store.recipes ?? {})[line.productId] ?? Object.entries(store.recipes ?? {}).find(([recipeKey]) => matchesDrink(recipeKey))?.[1] ?? [];
 
   const inventory = store.inventory ?? [];
-  const selectedCup = cupForOrderLine(inventory, costing, line.style);
+  const selectedCup = cupForOrderLine(inventory, costing, line.style, line.size);
   const cupIds = configuredCupIds(store.recipeCostings);
   const isCupIngredient = (ingredient: RecipeIngredient) => {
     if (cupIds.has(ingredient.inventoryItemId)) return true;

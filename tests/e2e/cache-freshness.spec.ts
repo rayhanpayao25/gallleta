@@ -39,14 +39,12 @@ test("login activity written by a separate client appears in Admin In/Out withou
   }
 });
 
-test("staff user, off request, and inventory item written by a separate client appear without restart", async ({ page }) => {
+test("staff user and inventory item written by a separate client appear without restart", async ({ page }) => {
   test.setTimeout(90_000);
   const supabase = supabaseTestClient();
   const userId = e2eId("user");
   const username = userId.replace(/[^a-z0-9]/g, "");
   const staffName = `E2E Ext ${e2eId("s")}`;
-  const offId = e2eId("off");
-  const offName = `E2E Off ${e2eId("o")}`;
   const invId = e2eId("inv");
   const invName = `E2E Stock ${e2eId("i")}`;
 
@@ -61,15 +59,6 @@ test("staff user, off request, and inventory item written by a separate client a
     role: "barista",
     title: "Barista",
   });
-  await supabase.from("off_requests").insert({
-    id: offId,
-    user_id: userId,
-    name: offName,
-    date: "2030-01-01",
-    reason: "e2e freshness",
-    status: "pending",
-    created_at: new Date().toISOString(),
-  });
   await supabase.from("inventory_items").insert({
     id: invId,
     name: invName,
@@ -83,18 +72,11 @@ test("staff user, off request, and inventory item written by a separate client a
     // Staff list (Staff tab is already open).
     await expect(page.getByText(staffName).first()).toBeVisible({ timeout: 30_000 });
 
-    // Request off tab.
-    await page.click('button:has-text("Request off")');
-    await expect(
-      page.locator("tr", { hasText: offName }).first(),
-    ).toBeVisible({ timeout: 30_000 });
-
     // Inventory panel -> Stock Inventory tab.
     await openAdminPanel(page, "Inventory");
     await page.click('button:has-text("Stock Inventory")');
     await expect(page.getByText(invName).first()).toBeVisible({ timeout: 30_000 });
   } finally {
-    await supabase.from("off_requests").delete().eq("id", offId);
     await supabase.from("staff_users").delete().eq("id", userId);
     await supabase.from("inventory_items").delete().eq("id", invId);
   }

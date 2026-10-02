@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createRestock, deleteAdminRecord, deleteRestock, saveAdminData } from "@/actions/pos";
 import { costingIngredientForItem, cupsFromQuantity, formatQty, ingredientsForOrderLine, itemNameEquals, looksLikeCupItem, matchesInventoryRow, perCupAmount, remainingForUsages, roundQty, stockLedgerForRange } from "@/lib/inventory";
 import { phDateString, phDateTimeLabel, phIsoFromDate, phPeriodBounds, type PeriodRange } from "@/lib/datetime";
-import { isFoodOrPastry, orderSoldAsLabel, orderSoldAsLines, orderSoldAsParts } from "@/lib/menu";
+import { orderSoldAsLabel, orderSoldAsLines, orderSoldAsParts } from "@/lib/menu";
 import type { Order, RecipeIngredient, StoreData } from "@/lib/types";
 
 function inventoryUsagePerPiece(item: StockItem, used: number) {
@@ -62,7 +62,6 @@ type Transaction = {
 
 function ordersToTransactions(orders: Order[]): Transaction[] {
   return orders
-    .filter((order) => !order.voided)
     .map((order) => {
       const quantity = order.items.reduce((sum, item) => sum + item.qty, 0);
       const amount = order.total;
@@ -175,14 +174,10 @@ function transactionToOrder(transaction: Transaction, existing?: Order): Order {
         ],
     total: transaction.amount,
     subtotal: existing?.subtotal ?? transaction.amount,
-    discount: existing?.discount,
-    promoLabel: existing?.promoLabel,
     paymentMethod: existing?.paymentMethod ?? "cash",
     ticketNo: existing?.ticketNo,
     paid: existing?.paid ?? transaction.amount,
     change: existing?.change,
-    voided: existing?.voided,
-    voidReason: existing?.voidReason,
     recordType: transaction.type,
   };
 }
@@ -296,7 +291,7 @@ export function SalePurchaseTransactions({
       .filter((orderId): orderId is string => Boolean(orderId)),
   );
   const orderUsageRows = store.orders
-    .filter((order) => !order.voided && !loggedOrderIds.has(order.id))
+    .filter((order) => !loggedOrderIds.has(order.id))
     .flatMap((order) => order.items.flatMap((line) => ingredientsForOrderLine(store, line).map((ingredient, ingredientIndex) => ({
       id: `${order.id}-${line.productId}-${ingredientIndex}`,
       orderId: order.id,
@@ -392,6 +387,8 @@ export function SalePurchaseTransactions({
     ingredients: RecipeIngredient[];
     hotCupInventoryItemId?: string;
     icedCupInventoryItemId?: string;
+    smallCupInventoryItemId?: string;
+    largeCupInventoryItemId?: string;
     otherCupInventoryItemId?: string;
   };
   const [recipeCostings, setRecipeCostings] = useState<Costing[]>([]);
@@ -753,7 +750,6 @@ export function SalePurchaseTransactions({
   const persistOrders = async (nextTransactions: Transaction[]) => {
     const nextById = new Map(nextTransactions.map((item) => [item.id, item]));
     const kept = store.orders.flatMap((order) => {
-      if (order.voided) return [order];
       const next = nextById.get(order.id);
       if (!next) return [];
       return [transactionToOrder(next, order)];
@@ -1030,7 +1026,7 @@ export function SalePurchaseTransactions({
   const usageGroups = useMemo(() => {
     const keyword = filterKeyword.trim().toLowerCase();
     return store.orders
-      .filter((order) => !order.voided && inDateRange(order.createdAt))
+      .filter((order) => inDateRange(order.createdAt))
       .map((order) => {
         const items = aggregateUsageRows(usages.filter((usage) => usage.orderId === order.id));
         const soldAsLines = orderSoldAsParts(order.items);
@@ -1331,9 +1327,15 @@ export function SalePurchaseTransactions({
                       <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-500">Ingredients: </p>
                       <div className="mt-3 grid gap-2 sm:grid-cols-2">
 
-                        {(["hotCupInventoryItemId", "icedCupInventoryItemId", "otherCupInventoryItemId"] as const).map((field) => (
+                        {([
+                          ["smallCupInventoryItemId", "16oz cup"],
+                          ["largeCupInventoryItemId", "22oz cup"],
+                          ["hotCupInventoryItemId", "Hot cup (legacy fallback)"],
+                          ["icedCupInventoryItemId", "Iced cup (legacy fallback)"],
+                          ["otherCupInventoryItemId", "Other cup"],
+                        ] as const).map(([field, label]) => (
                           <label key={field} className="text-xs text-neutral-600">
-                            {field === "hotCupInventoryItemId" ? "Hot cup" : field === "icedCupInventoryItemId" ? "Iced cup" : "Other cup"}
+                            {label}
                             <select
                               value={costing[field] ?? ""}
                               onChange={(event) => updateCosting(costingIndex, { [field]: event.target.value || undefined })}

@@ -1,17 +1,17 @@
-import type { DrinkStyle, MenuAddon, MenuItem, OrderAddon, OrderItem } from "@/lib/types";
+import type { DrinkStyle, MenuAddon, MenuItem, MenuSize, OrderAddon, OrderItem } from "@/lib/types";
 
 export const MENU_IMAGES = [
   { label: "Logo", src: "/images/logo.jpg" },
 ] as const;
 
 export const MENU_CATEGORIES = [
-  "Special",
-  "Classic",
-  "Non-Coffee",
-  "Fresh Drinks",
-  "Matcha Drinks",
-  "Food",
-  "Pastries",
+  "Non Coffee",
+  "Soda Series",
+  "Coffee Series",
+  "Milky Series",
+  "Yugort Series",
+  "Milk Tea Series",
+  "Frappe Series",
 ] as const;
 
 export const DRINK_STYLES: DrinkStyle[] = ["iced", "hot"];
@@ -99,6 +99,30 @@ export function normalizeMenuAddons(item: Pick<MenuItem, "addons"> | undefined):
       },
     ];
   });
+}
+
+export function normalizeMenuSizes(value: unknown): MenuSize[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap((entry: unknown) => {
+    const size = entry && typeof entry === "object" ? entry as Record<string, unknown> : {};
+    const label = String(size?.label ?? "").trim();
+    const price = Math.round(Number(size?.price));
+    if (!label || !Number.isFinite(price) || price <= 0 || seen.has(label.toLowerCase())) return [];
+    seen.add(label.toLowerCase());
+    return [{ label, price }];
+  });
+}
+
+export function menuSizePrice(item: MenuItem, size?: string) {
+  const sizes = normalizeMenuSizes(item.sizes);
+  return sizes.find((entry) => entry.label === size)?.price ?? item.price;
+}
+
+export function menuPriceLabel(item: MenuItem) {
+  const sizes = normalizeMenuSizes(item.sizes);
+  if (sizes.length === 0) return formatMoney(item.price);
+  return sizes.map((size) => `${size.label} ${formatMoney(size.price)}`).join(" · ");
 }
 
 // Legacy rows written by another branch embed an options payload after this
@@ -245,9 +269,10 @@ export function hydrateOrderLine<T extends Pick<OrderItem, "name" | "style" | "a
   };
 }
 
-export function orderLineOptionsLabel(item: Pick<OrderItem, "style" | "addons" | "name">) {
+export function orderLineOptionsLabel(item: Pick<OrderItem, "style" | "size" | "addons" | "name">) {
   const hydrated = hydrateOrderLine(item);
   const parts: string[] = [];
+  if (hydrated.size) parts.push(hydrated.size);
   if (hydrated.style) parts.push(drinkStyleLabel(hydrated.style));
   for (const addon of hydrated.addons ?? []) {
     if (!addon?.name) continue;
@@ -256,7 +281,7 @@ export function orderLineOptionsLabel(item: Pick<OrderItem, "style" | "addons" |
   return parts.join(", ");
 }
 
-export function drinkDisplayName(item: Pick<OrderItem, "name" | "style" | "addons">) {
+export function drinkDisplayName(item: Pick<OrderItem, "name" | "style" | "size" | "addons">) {
   return hydrateOrderLine(item).name || item.name;
 }
 
@@ -289,18 +314,18 @@ export function orderSoldAsLabel(items: OrderItem[]) {
   return orderSoldAsLines(items).join(", ");
 }
 
-export function cartLineKey(item: Pick<OrderItem, "productId" | "style" | "addons">) {
+export function cartLineKey(item: Pick<OrderItem, "productId" | "style" | "size" | "addons">) {
   const addons = (item.addons ?? [])
     .filter((addon) => addon.qty > 0)
     .map((addon) => `${addon.id}:${addon.qty}`)
     .sort()
     .join(",");
-  return `${item.productId}|${item.style ?? ""}|${addons}`;
+  return `${item.productId}|${item.size ?? ""}|${item.style ?? ""}|${addons}`;
 }
 
 export function pricedOrderLine(
   menuItem: MenuItem,
-  line: Pick<OrderItem, "qty" | "name" | "style" | "addons">,
+  line: Pick<OrderItem, "qty" | "name" | "style" | "size" | "addons">,
 ): OrderItem {
   const qty = Number(line.qty);
   const style =
@@ -312,63 +337,83 @@ export function pricedOrderLine(
         : undefined);
   const allowed = normalizeMenuStyles(menuItem);
   const nextStyle = style && allowed.includes(style) ? style : allowed.length === 1 ? allowed[0] : undefined;
+  const sizes = normalizeMenuSizes(menuItem.sizes);
+  const size =
+    sizes.find((entry) => entry.label === line.size)?.label ??
+    (sizes.length === 1 ? sizes[0].label : undefined);
   const addons = resolveOrderAddons(menuItem, line.addons);
   return {
     productId: menuItem.id,
     name: menuItem.name,
     qty,
-    price: menuItem.price + addonExtra(addons),
+    price: menuSizePrice(menuItem, size) + addonExtra(addons),
     category: menuItem.category,
     style: nextStyle,
+    size,
     addons,
   };
 }
 
 export const DEFAULT_MENU: MenuItem[] = ([
-  // Special
-  { id: "commune-signature", name: "Commune Signature", price: 170, category: "Special", available: true },
-  { id: "honey-oat", name: "Honey Oat", price: 170, category: "Special", available: true },
-  { id: "spanish-latte", name: "Spanish Latte", price: 125, category: "Special", available: true },
-  { id: "sea-salt-cream", name: "Sea Salt Cream", price: 135, category: "Special", available: true },
+  { id: "iced-matcha", name: "Iced Matcha", category: "Non Coffee", prices: [50, 70] },
+  { id: "iced-milo", name: "Iced Milo", category: "Non Coffee", prices: [50, 70] },
+  { id: "iced-choco", name: "Iced Choco", category: "Non Coffee", prices: [50, 70] },
+  { id: "choco-hazel-nut", name: "Choco Hazel Nut", category: "Non Coffee", prices: [50, 70] },
+  { id: "matcha-berry", name: "Matcha Berry", category: "Non Coffee", prices: [50, 70] },
+  { id: "blueberry-matcha", name: "Blueberry Matcha", category: "Non Coffee", prices: [50, 70] },
 
-  // Classic Coffee
-  { id: "americano-long-black", name: "Americano / Long Black", price: 120, category: "Classic", available: true },
-  { id: "latte", name: "Latte", price: 140, category: "Classic", available: true },
-  { id: "cappuccino", name: "Cappuccino", price: 150, category: "Classic", available: true },
-  { id: "biscoff-latte", name: "Biscoff Latte", price: 150, category: "Classic", available: true },
-  { id: "caramel-macchiato", name: "Caramel Macchiato", price: 130, category: "Classic", available: true },
-  { id: "hazelnut-blanc", name: "Hazelnut Blanc", price: 130, category: "Classic", available: true },
+  { id: "soda-green-apple", name: "Green Apple", category: "Soda Series", prices: [50, 70] },
+  { id: "soda-strawberry", name: "Strawberry", category: "Soda Series", prices: [50, 70] },
+  { id: "soda-blueberry", name: "Blueberry", category: "Soda Series", prices: [50, 70] },
+  { id: "mixed-berries-soda", name: "Mixed Berries", category: "Soda Series", prices: [50, 70] },
+  { id: "lychee-soda", name: "Lychee", category: "Soda Series", prices: [50, 70] },
 
-  // Non-Coffee
-  { id: "strawberry-creme", name: "Strawberry Créme", price: 130, category: "Non-Coffee", available: true },
-  { id: "oreo-blush", name: "Oreo Blush", price: 120, category: "Non-Coffee", available: true },
-  { id: "chocolate", name: "Chocolate", price: 120, category: "Non-Coffee", available: true },
+  { id: "caramel-macchiato", name: "Caramel Macchiato", category: "Coffee Series", prices: [50, 70] },
+  { id: "spanish-latte", name: "Spanish Latte", category: "Coffee Series", prices: [50, 70] },
+  { id: "vanilla-latte", name: "Vanilla Latte", category: "Coffee Series", prices: [50, 70] },
+  { id: "salted-caramel", name: "Salted Caramel", category: "Coffee Series", prices: [50, 70] },
+  { id: "matcha-latte", name: "Matcha Latte", category: "Coffee Series", prices: [50, 70] },
+  { id: "mocha-latte", name: "Mocha Latte", category: "Coffee Series", prices: [50, 70] },
 
-  // Fresh Drinks
-  { id: "strawberry-whisper", name: "Strawberry Whisper", price: 120, category: "Fresh Drinks", available: true },
-  { id: "watermelon-whisper", name: "Watermelon Whisper", price: 120, category: "Fresh Drinks", available: true },
+  { id: "milky-strawberry-milk", name: "Strawberry Milk", category: "Milky Series", prices: [89, 109] },
+  { id: "strawberry-matcha", name: "Strawberry Matcha", category: "Milky Series", prices: [89, 109] },
+  { id: "matcha-oreo", name: "Matcha Oreo", category: "Milky Series", prices: [89, 109] },
+  { id: "milky-cookies-cream", name: "Cookies & Cream", category: "Milky Series", prices: [89, 109] },
+  { id: "milo-lava", name: "Milo Lava", category: "Milky Series", prices: [89, 109] },
+  { id: "choco-berry", name: "Choco Berry", category: "Milky Series", prices: [89, 109] },
 
-  // Matcha Drinks
-  { id: "matcha-umami", name: "Matcha Umami", price: 190, category: "Matcha Drinks", available: true },
-  { id: "matcha-latte", name: "Matcha Latte", price: 155, category: "Matcha Drinks", available: true },
-  { id: "hojicha-latte", name: "Hojicha Latte", price: 155, category: "Matcha Drinks", available: true },
-  { id: "matcha-creme-latte", name: "Matcha Créme Latte", price: 155, category: "Matcha Drinks", available: true },
-  { id: "sea-salt-matcha-cloud", name: "Sea Salt Matcha Cloud", price: 155, category: "Matcha Drinks", available: true },
+  { id: "yogurt-strawberry", name: "Strawberry", category: "Yugort Series", prices: [50, 70] },
+  { id: "yogurt-blueberry", name: "Blueberry", category: "Yugort Series", prices: [50, 70] },
+  { id: "yogurt-green-apple", name: "Green Apple", category: "Yugort Series", prices: [50, 70] },
+  { id: "yogurt-mixed-berries", name: "Mixed Berries", category: "Yugort Series", prices: [50, 70] },
 
-  // Food
-  { id: "fries", name: "Fries", price: 120, category: "Food", available: true },
-  { id: "tuna-sandwich", name: "Tuna Sandwich", price: 130, category: "Food", available: true },
-  { id: "club-sandwich", name: "Club Sandwich", price: 180, category: "Food", available: true },
+  { id: "brown-sugar-boba", name: "Brown Sugar Boba", category: "Milk Tea Series", prices: [60, 80] },
+  { id: "okinawa-milk-tea", name: "Okinawa", category: "Milk Tea Series", prices: [60, 80] },
+  { id: "wintermelon-milk-tea", name: "Wintermelon", category: "Milk Tea Series", prices: [60, 80] },
+  { id: "dark-choco-milk-tea", name: "Dark Choco", category: "Milk Tea Series", prices: [60, 80] },
+  { id: "cookies-cream-milk-tea", name: "Cookies & Cream", category: "Milk Tea Series", prices: [60, 80] },
 
-  // Pastries
-  { id: "choco-chip-cookie", name: "Choco Chip Cookie", price: 80, category: "Pastries", available: true },
-  { id: "red-velvet-cookie", name: "Red Velvet Cookie", price: 80, category: "Pastries", available: true },
-  { id: "choco-fudge", name: "Choco Fudge", price: 85, category: "Pastries", available: true },
-  { id: "revel-bar", name: "Revel Bar", price: 85, category: "Pastries", available: true },
-]).map((item) => ({
-  ...item,
+  { id: "frappe-strawberry-milk", name: "Strawberry Milk", category: "Frappe Series", prices: [129] },
+  { id: "frappe-matcha", name: "Matcha", category: "Frappe Series", prices: [129] },
+  { id: "frappe-matcha-oreo", name: "Matcha Oreo", category: "Frappe Series", prices: [129] },
+  { id: "dark-choco-cookies-frappe", name: "Dark Choco Cookies", category: "Frappe Series", prices: [129] },
+  { id: "java-chips-frappe", name: "Java Chips", category: "Frappe Series", prices: [129] },
+]).map((item, sortOrder) => ({
+  id: item.id,
+  name: item.name,
+  price: item.prices[0],
+  sortOrder,
+  sizes: item.prices.length === 1
+    ? [{ label: "22oz", price: item.prices[0] }]
+    : [
+        { label: "16oz", price: item.prices[0] },
+        { label: "22oz", price: item.prices[1] },
+      ],
+  category: item.category,
   image: MENU_IMAGES[0].src,
-  styles: isFoodOrPastry(item.category) ? [] : [...DRINK_STYLES],
+  available: true,
+  styles: [],
+  addons: [],
 }));
 
 export const MENU = DEFAULT_MENU;

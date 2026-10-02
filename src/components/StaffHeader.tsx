@@ -6,14 +6,13 @@ import { BrandLogo } from "@/components/BrandLogo";
 import { logout } from "@/actions/auth";
 import type { Session } from "@/lib/types";
 
-export type AdminPanel = "sales" | "menu" | "transactions" | "staff" | "voids";
+export type AdminPanel = "sales" | "menu" | "transactions" | "staff";
 
 const TABS: { id: AdminPanel; label: string }[] = [
   { id: "sales", label: "Sales" },
   { id: "menu", label: "Menu" },
   { id: "transactions", label: "Inventory" },
   { id: "staff", label: "Staff" },
-  { id: "voids", label: "Void request approval" },
 ];
 
 type StaffHeaderProps = {
@@ -92,7 +91,7 @@ export function StaffHeader({ session, panel, onPanelChange }: StaffHeaderProps)
         }`}
       >
         <div className="flex items-center justify-between border-b border-neutral-200 px-5 py-4">
-          <p className="text-sm font-semibold tracking-tight lowercase">commune</p>
+          <p className="text-sm font-semibold tracking-tight">Coffee ZZ</p>
           <button
             type="button"
             aria-label="Close menu"

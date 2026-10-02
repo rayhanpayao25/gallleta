@@ -6,10 +6,10 @@ import type { Page } from "@playwright/test";
 // --- approved local test credentials (see task) ---------------------------
 export const ADMIN_URL = "/mouna1233";
 export const ADMIN_USERNAME = "admin";
-export const ADMIN_PASSWORD = "commune";
+export const ADMIN_PASSWORD = "coffeezz";
 export const CASHIER_URL = "/sale1803";
 export const CASHIER_USERNAME = "cashier";
-export const CASHIER_PASSWORD = "commune";
+export const CASHIER_PASSWORD = "coffeezz";
 
 // --- unique test-data naming (shared/live Supabase project) --------------
 // Every row this suite writes uses this prefix so it's trivially
@@ -53,7 +53,7 @@ export async function loginAsAdmin(page: Page) {
   await page.goto(ADMIN_URL, { waitUntil: "domcontentloaded" });
   await page.fill('input[name="username"]', ADMIN_USERNAME);
   await page.fill('input[name="password"]', ADMIN_PASSWORD);
-  await page.click('button:has-text("Enter commune")');
+  await page.click('button:has-text("Enter Coffee ZZ")');
   await page.waitForURL("**/admin", { timeout: 15000 });
   await page.waitForSelector("text=Sales analysis", { timeout: 15000 });
 }
@@ -62,7 +62,7 @@ export async function loginAsCashier(page: Page) {
   await page.goto(CASHIER_URL, { waitUntil: "domcontentloaded" });
   await page.fill('input[name="username"]', CASHIER_USERNAME);
   await page.fill('input[name="password"]', CASHIER_PASSWORD);
-  await page.click('button:has-text("Enter commune")');
+  await page.click('button:has-text("Enter Coffee ZZ")');
   await page.waitForURL("**/pos", { timeout: 15000 });
 }
 

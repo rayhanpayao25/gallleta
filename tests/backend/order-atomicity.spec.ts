@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { supabaseTestClient, e2eId } from "../e2e/utils";
 
 // These call the Postgres RPCs directly (create_order_atomic,
-// void_order_atomic, delete_order_atomic) against the live, shared Supabase
+// delete_order_atomic) against the live, shared Supabase
 // project - no browser needed. Every row uses an e2e-* id and is cleaned up
 // regardless of pass/fail.
 
@@ -22,9 +22,6 @@ test.describe("order creation atomicity", () => {
         p_barista_user_id: null,
         p_items: [{ productId: realMenuItem.id, name: realMenuItem.name, qty: 1, price: realMenuItem.price }],
         p_subtotal: realMenuItem.price,
-        p_discount: 0,
-        p_promo_id: null,
-        p_promo_label: null,
         p_total: realMenuItem.price,
         p_payment_method: "cash",
         p_ticket_no: "E2E",
@@ -64,9 +61,6 @@ test.describe("order creation atomicity", () => {
           p_barista_user_id: null,
           p_items: [{ productId: realMenuItem.id, name: realMenuItem.name, qty: 1, price: realMenuItem.price }],
           p_subtotal: realMenuItem.price,
-          p_discount: 0,
-          p_promo_id: null,
-          p_promo_label: null,
           p_total: realMenuItem.price,
           p_payment_method: "cash",
           p_ticket_no: orderId,
@@ -96,97 +90,30 @@ test.describe("order creation atomicity", () => {
   });
 });
 
-test.describe("void atomicity", () => {
-  test("void restores inventory exactly once; concurrent double-void cannot double-restore", async () => {
-    const supabase = supabaseTestClient();
-    const realMenuItem = (await supabase.from("menu_items").select("id, name, price").limit(1).single()).data!;
-    const itemId = e2eId("inv");
-    await supabase.from("inventory_items").insert({ id: itemId, name: "E2E Void Item", unit: "pcs", cost: 1, stock: 5, max_stock: 100 });
-    const orderId = e2eId("order");
-
-    try {
-      await supabase.rpc("create_order_atomic", {
-        p_order_id: orderId,
-        p_created_at: new Date().toISOString(),
-        p_barista_name: "E2E",
-        p_barista_user_id: null,
-        p_items: [{ productId: realMenuItem.id, name: realMenuItem.name, qty: 1, price: realMenuItem.price }],
-        p_subtotal: realMenuItem.price,
-        p_discount: 0,
-        p_promo_id: null,
-        p_promo_label: null,
-        p_total: realMenuItem.price,
-        p_payment_method: "cash",
-        p_ticket_no: "E2E",
-        p_paid: realMenuItem.price,
-        p_change: 0,
-        p_deductions: [{ inventoryItemId: itemId, itemName: "E2E Void Item", amount: 5, unit: "pcs" }],
-      });
-      const stockAfterOrder = await supabase.from("inventory_items").select("stock").eq("id", itemId).maybeSingle();
-      expect(Number(stockAfterOrder.data?.stock)).toBe(0);
-
-      const [r1, r2, r3] = await Promise.all([
-        supabase.rpc("void_order_atomic", { p_order_id: orderId, p_reason: "race A", p_voided_by: null }),
-        supabase.rpc("void_order_atomic", { p_order_id: orderId, p_reason: "race B", p_voided_by: null }),
-        supabase.rpc("void_order_atomic", { p_order_id: orderId, p_reason: "race C", p_voided_by: null }),
-      ]);
-      const succeeded = [r1, r2, r3].filter((r) => r.data?.ok === true);
-      expect(succeeded, "exactly one concurrent void call should succeed").toHaveLength(1);
-
-      const stockAfterVoid = await supabase.from("inventory_items").select("stock").eq("id", itemId).maybeSingle();
-      expect(Number(stockAfterVoid.data?.stock), "stock restored exactly once").toBe(5);
-
-      const order = await supabase.from("orders").select("voided, void_reason, voided_at").eq("id", orderId).maybeSingle();
-      expect(order.data?.voided).toBe(true);
-      expect(order.data?.void_reason).toBeTruthy();
-      expect(order.data?.voided_at).toBeTruthy();
-    } finally {
-      await supabase.from("orders").delete().eq("id", orderId);
-      await supabase.from("inventory_items").delete().eq("id", itemId);
-    }
-  });
-});
-
 test.describe("delete-order restoration", () => {
-  test("deleting a non-voided order restores inventory; deleting an already-voided order does not restore twice", async () => {
+  test("deleting an order restores inventory", async () => {
     const supabase = supabaseTestClient();
     const realMenuItem = (await supabase.from("menu_items").select("id, name, price").limit(1).single()).data!;
     const itemId = e2eId("inv");
     await supabase.from("inventory_items").insert({ id: itemId, name: "E2E Delete Item", unit: "pcs", cost: 1, stock: 10, max_stock: 100 });
     const orderA = e2eId("order");
-    const orderB = e2eId("order");
 
     try {
-      // Non-voided delete restores.
       await supabase.rpc("create_order_atomic", {
         p_order_id: orderA, p_created_at: new Date().toISOString(), p_barista_name: "E2E", p_barista_user_id: null,
         p_items: [{ productId: realMenuItem.id, name: realMenuItem.name, qty: 1, price: realMenuItem.price }],
-        p_subtotal: realMenuItem.price, p_discount: 0, p_promo_id: null, p_promo_label: null, p_total: realMenuItem.price,
+        p_subtotal: realMenuItem.price, p_total: realMenuItem.price,
         p_payment_method: "cash", p_ticket_no: "A", p_paid: realMenuItem.price, p_change: 0,
         p_deductions: [{ inventoryItemId: itemId, itemName: "E2E Delete Item", amount: 3, unit: "pcs" }],
       });
       await supabase.rpc("delete_order_atomic", { p_order_id: orderA });
       const stockAfterA = await supabase.from("inventory_items").select("stock").eq("id", itemId).maybeSingle();
-      expect(Number(stockAfterA.data?.stock), "restored after deleting non-voided order").toBe(10);
+      expect(Number(stockAfterA.data?.stock), "restored after deleting order").toBe(10);
       expect((await supabase.from("orders").select("id").eq("id", orderA)).data ?? []).toHaveLength(0);
       expect((await supabase.from("usage_logs").select("id").eq("order_id", orderA)).data ?? []).toHaveLength(0);
 
-      // Voided delete does not restore a second time.
-      await supabase.rpc("create_order_atomic", {
-        p_order_id: orderB, p_created_at: new Date().toISOString(), p_barista_name: "E2E", p_barista_user_id: null,
-        p_items: [{ productId: realMenuItem.id, name: realMenuItem.name, qty: 1, price: realMenuItem.price }],
-        p_subtotal: realMenuItem.price, p_discount: 0, p_promo_id: null, p_promo_label: null, p_total: realMenuItem.price,
-        p_payment_method: "cash", p_ticket_no: "B", p_paid: realMenuItem.price, p_change: 0,
-        p_deductions: [{ inventoryItemId: itemId, itemName: "E2E Delete Item", amount: 4, unit: "pcs" }],
-      });
-      await supabase.rpc("void_order_atomic", { p_order_id: orderB, p_reason: "e2e", p_voided_by: null });
-      const stockAfterVoidB = await supabase.from("inventory_items").select("stock").eq("id", itemId).maybeSingle();
-      expect(Number(stockAfterVoidB.data?.stock)).toBe(10);
-      await supabase.rpc("delete_order_atomic", { p_order_id: orderB });
-      const stockAfterDeleteB = await supabase.from("inventory_items").select("stock").eq("id", itemId).maybeSingle();
-      expect(Number(stockAfterDeleteB.data?.stock), "deleting an already-voided order must not restore a second time").toBe(10);
     } finally {
-      await supabase.from("orders").delete().in("id", [orderA, orderB]);
+      await supabase.from("orders").delete().eq("id", orderA);
       await supabase.from("inventory_items").delete().eq("id", itemId);
     }
   });

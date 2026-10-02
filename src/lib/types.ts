@@ -9,6 +9,11 @@ export type Session = {
 
 export type DrinkStyle = "iced" | "hot";
 
+export type MenuSize = {
+  label: string;
+  price: number;
+};
+
 export type MenuAddon = {
   id: string;
   name: string;
@@ -34,10 +39,12 @@ export type MenuItem = {
   name: string;
   price: number;
   category: string;
+  sortOrder?: number;
   image: string;
   available: boolean;
   styles?: DrinkStyle[];
   addons?: MenuAddon[];
+  sizes?: MenuSize[];
 };
 
 export type OrderItem = {
@@ -46,6 +53,7 @@ export type OrderItem = {
   qty: number;
   price: number;
   style?: DrinkStyle;
+  size?: string;
   category?: string;
   addons?: OrderAddon[];
 };
@@ -59,20 +67,16 @@ export type Order = {
   items: OrderItem[];
   total: number;
   subtotal?: number;
-  discount?: number;
-  promoLabel?: string;
   paymentMethod?: PaymentMethod;
   ticketNo?: string;
   paid?: number;
   change?: number;
-  voided?: boolean;
-  voidReason?: string;
   recordType?: "Sale" | "Purchase";
 };
 
 export type PrintJobType = "cup-label" | "customer-receipt";
 
-export type PrintJobStatus = "pending" | "printed" | "failed" | "cancelled";
+export type PrintJobStatus = "pending" | "printed" | "failed";
 
 export type PrintJob = {
   id: string;
@@ -98,14 +102,6 @@ export type PosState = {
   isOpen: boolean;
   openedAt: string | null;
   openedBy: string | null;
-};
-
-export type Promotion = {
-  id: string;
-  label: string;
-  type: "percent" | "amount";
-  value: number;
-  active: boolean;
 };
 
 export type StaffUser = {
@@ -144,6 +140,8 @@ export type RecipeCosting = {
   ingredients: RecipeIngredient[];
   hotCupInventoryItemId?: string;
   icedCupInventoryItemId?: string;
+  smallCupInventoryItemId?: string;
+  largeCupInventoryItemId?: string;
   otherCupInventoryItemId?: string;
 };
 
@@ -195,42 +193,12 @@ export type LoginActivity = {
   at: string;
 };
 
-export type OffRequest = {
-  id: string;
-  userId: string;
-  name: string;
-  date: string;
-  reason: string;
-  status: "pending" | "approved" | "denied";
-  createdAt: string;
-};
-
-export type VoidRequest = {
-  id: string;
-  requestedAt: string;
-  requestedById: string;
-  requestedByName: string;
-  reason: string;
-  status: "pending" | "approved";
-  orderId?: string;
-  items: OrderItem[];
-  subtotal: number;
-  discount: number;
-  promoLabel?: string;
-  total: number;
-  paymentMethod: PaymentMethod;
-  approvedAt?: string;
-  approvedByName?: string;
-  processedOrderId?: string;
-};
-
 export type StoreData = {
   pos: PosState;
   orders: Order[];
   printJobs: PrintJob[];
   menu: MenuItem[];
   categories: string[];
-  promotions: Promotion[];
   users: StaffUser[];
   inventory: InventoryItem[];
   recipes: Record<string, RecipeIngredient[]>;
@@ -239,8 +207,6 @@ export type StoreData = {
   restocks: RestockRecord[];
   costings: CostingItem[];
   loginActivity: LoginActivity[];
-  offRequests: OffRequest[];
-  voidRequests: VoidRequest[];
   loginGates: {
     admin: string;
     cashier: string;

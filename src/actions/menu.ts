@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/auth";
-import { addonIdFromName, DRINK_STYLES, isFoodOrPastry, menuItemId, normalizeMenuAddons, normalizeMenuStyles, stripMenuImage } from "@/lib/menu";
+import { addonIdFromName, DRINK_STYLES, isFoodOrPastry, menuItemId, normalizeMenuAddons, normalizeMenuSizes, normalizeMenuStyles, stripMenuImage } from "@/lib/menu";
 import type { DrinkStyle, MenuAddon, MenuItem } from "@/lib/types";
 import {
   deleteMenuCategoryRecord,
@@ -127,6 +127,31 @@ function addonsFromForm(formData: FormData): MenuAddon[] {
   });
 }
 
+function sizesFromForm(
+  formData: FormData,
+  category: string,
+): { sizes: NonNullable<MenuItem["sizes"]> } | { error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readText(formData, "sizes"));
+  } catch {
+    return { error: "Enter valid prices for each cup size." };
+  }
+  const sizes = normalizeMenuSizes(parsed);
+  const expected = category === "Frappe Series" ? ["22oz"] : ["16oz", "22oz"];
+  if (
+    sizes.length !== expected.length ||
+    expected.some((label, index) => sizes[index]?.label !== label)
+  ) {
+    return {
+      error: category === "Frappe Series"
+        ? "Frappe items need a 22oz price."
+        : "Enter both 16oz and 22oz prices.",
+    };
+  }
+  return { sizes };
+}
+
 export async function addMenuCategory(name: string) {
   await requireAdmin();
   const category = name.trim();
@@ -192,16 +217,14 @@ export async function createMenuItem(formData: FormData) {
   await requireAdmin();
   const name = readText(formData, "name");
   const category = readText(formData, "category");
-  const price = Number(readText(formData, "price"));
+  const sizeResult = sizesFromForm(formData, category);
   const available = readText(formData, "available") !== "false";
   const photo = photoFromForm(formData);
 
   if (!name || !category) {
     return { error: "Name and category are required." };
   }
-  if (!Number.isFinite(price) || price <= 0) {
-    return { error: "Enter a valid price." };
-  }
+  if ("error" in sizeResult) return sizeResult;
 
   const id = menuItemId(name);
   let image = "/images/logo.jpg";
@@ -214,12 +237,13 @@ export async function createMenuItem(formData: FormData) {
   await upsertMenuItemRecord({
     id,
     name,
-    price: Math.round(price),
+    price: sizeResult.sizes[0].price,
     category,
     image,
     available,
     styles: stylesFromForm(formData, category),
     addons: addonsFromForm(formData),
+    sizes: sizeResult.sizes,
   });
   refresh();
   return { ok: true };
@@ -230,7 +254,7 @@ export async function updateMenuItem(formData: FormData) {
   const id = readText(formData, "id");
   const name = readText(formData, "name");
   const category = readText(formData, "category");
-  const price = Number(readText(formData, "price"));
+  const sizeResult = sizesFromForm(formData, category);
   const available = readText(formData, "available") !== "false";
   const photo = photoFromForm(formData);
 
@@ -238,9 +262,7 @@ export async function updateMenuItem(formData: FormData) {
   if (!name || !category) {
     return { error: "Name and category are required." };
   }
-  if (!Number.isFinite(price) || price <= 0) {
-    return { error: "Enter a valid price." };
-  }
+  if ("error" in sizeResult) return sizeResult;
 
   let uploaded: string | undefined;
   if (photo) {
@@ -258,11 +280,12 @@ export async function updateMenuItem(formData: FormData) {
   await upsertMenuItemRecord({
     ...existing,
     name,
-    price: Math.round(price),
+    price: sizeResult.sizes[0].price,
     category,
     available,
     styles: stylesFromForm(formData, category, existing),
     addons: addonsFromForm(formData),
+    sizes: sizeResult.sizes,
     image: uploaded ?? (isSafeImage(existing.image) ? existing.image : "/images/logo.jpg"),
   });
   refresh();

@@ -13,8 +13,6 @@ export type ReceiptTicket = {
   barista: string;
   items: ReceiptItem[];
   subtotal: number;
-  discount: number;
-  promoLabel?: string;
   total: number;
   paymentMethod?: PaymentMethod;
   paid?: number;
@@ -91,8 +89,6 @@ export function receiptFromOrder(
         menu.find((menuItem) => menuItem.id === item.productId)?.category,
     })),
     subtotal,
-    discount: order.discount ?? 0,
-    promoLabel: order.promoLabel,
     total: order.total,
     paymentMethod: order.paymentMethod,
     paid,
@@ -250,16 +246,6 @@ export function customerLines(
     kind: "text",
     text: padLine("Subtotal", receiptMoney(ticket.subtotal), width),
   });
-  if (ticket.discount > 0) {
-    lines.push({
-      kind: "text",
-      text: padLine(
-        ticket.promoLabel ?? "Discount",
-        `-${receiptMoney(ticket.discount)}`,
-        width,
-      ),
-    });
-  }
   lines.push({
     kind: "text",
     text: padLine("TOTAL", receiptMoney(ticket.total), width),
@@ -381,7 +367,6 @@ export function sampleTicket(now = new Date()): ReceiptTicket {
       },
     ],
     subtotal: 467,
-    discount: 0,
     total: 467,
     paymentMethod: "cash",
     paid: 500,

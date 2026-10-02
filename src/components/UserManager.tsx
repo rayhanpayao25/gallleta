@@ -2,12 +2,9 @@
 
 import { useMemo, useState, useTransition } from "react";
 import {
-  createOffRequest,
   createStaffUser,
-  deleteOffRequest,
   deleteStaffUser,
   punchStaff,
-  setOffRequestStatus,
   updateLoginGates,
   updateStaffSessionTimes,
   deleteStaffSession,
@@ -16,7 +13,7 @@ import {
 import type { PublicStaffUser } from "@/lib/users";
 import { phDateString, phDateTimeInputValue, phDateTimeLabel } from "@/lib/datetime";
 import { pairLoginSessions, type StaffSession } from "@/lib/staff-sessions";
-import type { LoginActivity, OffRequest, Session } from "@/lib/types";
+import type { LoginActivity, Session } from "@/lib/types";
 import type { LoginGates } from "@/lib/staff-gates";
 
 const field =
@@ -26,14 +23,13 @@ type UserManagerProps = {
   users: PublicStaffUser[];
   session: Session;
   loginActivity: LoginActivity[];
-  offRequests: OffRequest[];
   loginGates: LoginGates;
 };
 
-type SubTab = "staff" | "inout" | "off" | "gates";
+type SubTab = "staff" | "inout" | "gates";
 type StaffRole = "Admin" | "Barista" | "Manager" | "Cashier";
 
-export function UserManager({ users, session, loginActivity, offRequests, loginGates }: UserManagerProps) {
+export function UserManager({ users, session, loginActivity, loginGates }: UserManagerProps) {
   const [tab, setTab] = useState<SubTab>("staff");
   const [editingId, setEditingId] = useState<string | "new" | null>(null);
   const [name, setName] = useState("");
@@ -47,24 +43,22 @@ export function UserManager({ users, session, loginActivity, offRequests, loginG
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editLoginAt, setEditLoginAt] = useState("");
   const [editLogoutAt, setEditLogoutAt] = useState("");
-  const [offUserId, setOffUserId] = useState("");
-  const [offDate, setOffDate] = useState(phDateString());
-  const [offReason, setOffReason] = useState("");
   const [adminGate, setAdminGate] = useState(loginGates.admin);
   const [cashierGate, setCashierGate] = useState(loginGates.cashier);
   
   // Global filter/display date state for In / Out
   const [selectedDate, setSelectedDate] = useState(phDateString());
 
-  // Global filter/display date state for Request off
-  const [offSelectedDate, setOffSelectedDate] = useState(phDateString());
-
   const uniqueUsers = useMemo(
     () => Array.from(new Map(users.map((user) => [user.id, user])).values()),
     [users],
   );
+  const floorStaff = uniqueUsers.filter(
+    (user) =>
+      user.role === "barista" ||
+      /barista/i.test(`${user.title} ${user.username} ${user.name}`),
+  );
   const editing = uniqueUsers.find((user) => user.id === editingId) ?? null;
-  const floorStaff = uniqueUsers.filter((user) => user.role !== "admin");
   const allSessions = useMemo(() => pairLoginSessions(loginActivity), [loginActivity]);
 
   // Filter sessions based on selectedDate
@@ -76,16 +70,6 @@ export function UserManager({ users, session, loginActivity, offRequests, loginG
       return loginDateStr === selectedDate || logoutDateStr === selectedDate;
     });
   }, [allSessions, selectedDate]);
-
-  // Filter off requests based on offSelectedDate
-  const requests = useMemo(() => {
-    const sorted = [...offRequests].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
-    if (!offSelectedDate) return sorted;
-    return sorted.filter((req) => {
-      const reqDateStr = req.date ? new Date(req.date).toISOString().split("T")[0] : "";
-      return reqDateStr === offSelectedDate;
-    });
-  }, [offRequests, offSelectedDate]);
 
   function startCreate() {
     setEditingId("new");
@@ -137,7 +121,6 @@ export function UserManager({ users, session, loginActivity, offRequests, loginG
             [
               { id: "staff", label: "Staff" },
               { id: "inout", label: "In / Out" },
-              { id: "off", label: "Request off" },
               { id: "gates", label: "Login links" },
             ] as const
           ).map((entry) => (
@@ -534,142 +517,6 @@ export function UserManager({ users, session, loginActivity, offRequests, loginG
                         </tr>
                       );
                     })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </>
-        ) : null}
-
-        {tab === "off" ? (
-          <>
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <h1 className="text-xl font-semibold tracking-tight">Request off</h1>
-              
-              {/* Date Selector for Request off matching In / Out style */}
-              <div className="flex items-center self-start sm:self-auto rounded-xl border border-neutral-200 bg-white px-3.5 py-2 shadow-sm">
-                <div className="relative flex items-center gap-2 cursor-pointer">
-                  <span className="text-sm font-medium text-neutral-400 select-none">Date:</span>
-                  <input
-                    type="date"
-                    value={offSelectedDate}
-                    onChange={(event) => setOffSelectedDate(event.target.value)}
-                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                  />
-                  <span className="text-sm font-medium text-neutral-700 select-none">
-                    {offSelectedDate ? new Date(offSelectedDate).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }) : "Select date"}
-                  </span>
-                  <svg viewBox="0 0 24 24" className="h-4 w-4 text-neutral-500 ml-1 pointer-events-none" fill="none" stroke="currentColor">
-                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" strokeWidth="1.7" />
-                    <line x1="16" y1="2" x2="16" y2="6" strokeWidth="1.7" strokeLinecap="round" />
-                    <line x1="8" y1="2" x2="8" y2="6" strokeWidth="1.7" strokeLinecap="round" />
-                    <line x1="3" y1="10" x2="21" y2="10" strokeWidth="1.7" />
-                  </svg>
-                </div>
-              </div>
-            </div>
-
-            <form
-              className="grid gap-3 rounded-2xl border border-neutral-200 bg-white p-4 sm:grid-cols-4 sm:items-end"
-              onSubmit={(event) => {
-                event.preventDefault();
-                startTransition(async () => {
-                  const result = await createOffRequest({ userId: offUserId, date: offDate, reason: offReason });
-                  if (result && "error" in result && result.error) {
-                    setNotice(typeof result.error === "string" ? result.error : "Could not save.");
-                    return;
-                  }
-                  setOffReason("");
-                  setNotice(null);
-                });
-              }}
-            >
-              <label className="text-xs font-medium text-neutral-600">
-                <span className="mb-1.5 block">Staff</span>
-                <select value={offUserId} onChange={(event) => setOffUserId(event.target.value)} className={field} required>
-                  <option value="">Select staff</option>
-                  {floorStaff.map((user) => (
-                    <option key={user.id} value={user.id}>
-                      {user.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="text-xs font-medium text-neutral-600">
-                <span className="mb-1.5 block">Date</span>
-                <input type="date" value={offDate} onChange={(event) => setOffDate(event.target.value)} className={field} required />
-              </label>
-              <label className="text-xs font-medium text-neutral-600 sm:col-span-1">
-                <span className="mb-1.5 block">Reason</span>
-                <input value={offReason} onChange={(event) => setOffReason(event.target.value)} className={field} required />
-              </label>
-              <button
-                type="submit"
-                disabled={pending}
-                className="rounded-full bg-black px-4 py-2.5 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-40"
-              >
-                Add
-              </button>
-            </form>
-            <div className="overflow-x-auto rounded-2xl border border-neutral-200 bg-white">
-              <table className="w-full min-w-[640px] text-left text-sm">
-                <thead>
-                  <tr className="border-b border-neutral-200 text-xs font-medium tracking-wide text-neutral-400 uppercase">
-                    <th className="px-4 py-3">Staff</th>
-                    <th className="px-4 py-3">Date</th>
-                    <th className="px-4 py-3">Reason</th>
-                    <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3 text-right"> </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {requests.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="px-4 py-8 text-center text-sm text-neutral-400">
-                        No off requests for this date.
-                      </td>
-                    </tr>
-                  ) : (
-                    requests.map((request) => (
-                      <tr key={request.id} className="border-t border-neutral-100">
-                        <td className="px-4 py-3 font-medium">{request.name}</td>
-                        <td className="px-4 py-3 whitespace-nowrap">{phDateTimeLabel(request.date)}</td>
-                        <td className="px-4 py-3 text-neutral-600">{request.reason}</td>
-                        <td className="px-4 py-3 capitalize">{request.status}</td>
-                        <td className="px-4 py-3">
-                          <div className="flex justify-end gap-2 text-xs font-medium">
-                            {request.status === "pending" ? (
-                              <>
-                                <button
-                                  type="button"
-                                  disabled={pending}
-                                  onClick={() => startTransition(async () => { await setOffRequestStatus(request.id, "approved"); })}
-                                  className="hover:underline"
-                                >
-                                  Approve
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={pending}
-                                  onClick={() => startTransition(async () => { await setOffRequestStatus(request.id, "denied"); })}
-                                  className="hover:underline"
-                                >
-                                  Deny
-                                </button>
-                              </>
-                            ) : null}
-                            <button
-                              type="button"
-                              disabled={pending}
-                              onClick={() => startTransition(async () => { await deleteOffRequest(request.id); })}
-                              className="text-red-600 hover:underline"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
                   )}
                 </tbody>
               </table>

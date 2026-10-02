@@ -18,7 +18,10 @@ export default async function AdminPage() {
   const store = await getStore();
 
   return (
-    <main className="min-h-svh overflow-x-hidden bg-neutral-100 text-black">
+    <main
+      suppressHydrationWarning
+      className="min-h-svh overflow-x-hidden bg-neutral-100 text-black"
+    >
       <AdminShell session={session} users={store.users.map(publicUser)} store={store}>
         <AdminDashboard store={store} />
       </AdminShell>

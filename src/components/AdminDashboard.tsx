@@ -1,9 +1,7 @@
 "use client";
 
-import { useState, useEffect, useTransition } from "react";
-import { approveVoidRequest } from "@/actions/pos";
-import { drinkDisplayName, formatMoney, orderLineListLabel, orderLineOptionsLabel } from "@/lib/menu";
-import { phDateTimeLabel } from "@/lib/datetime";
+import { useState, useEffect } from "react";
+import { drinkDisplayName, formatMoney, orderLineOptionsLabel } from "@/lib/menu";
 import { paymentLabel } from "@/lib/payments";
 import { ingredientsForOrderLine } from "@/lib/inventory";
 import {
@@ -12,7 +10,6 @@ import {
   cafeHours,
   categorySales,
   lastNDays,
-  liveOrders,
   lowSellers,
   ordersOnDay,
   paymentStats,
@@ -21,7 +18,6 @@ import {
   salesByHour,
   salesByYearMonths,
   sumSales,
-  unitsSold,
 } from "@/lib/analytics";
 import type { Order, StoreData } from "@/lib/types";
 
@@ -129,10 +125,6 @@ function toInputDateStr(date: Date) {
   }).format(date);
 }
 
-function isVoided(order: Order) {
-  return Boolean(order.voided) || Boolean(order.voidReason?.trim());
-}
-
 function orderIdLabel(order: Order) {
   return order.ticketNo != null ? `#${order.ticketNo}` : order.id;
 }
@@ -149,8 +141,6 @@ export function AdminDashboard({ store }: { store: StoreData }) {
   const [filterDateStr, setFilterDateStr] = useState("");
   const [rangeType, setRangeType] = useState<string>("today");
   const [activeFilterMode, setActiveFilterMode] = useState<"range" | "date">("range");
-  const [approvalMessage, setApprovalMessage] = useState<string | null>(null);
-  const [approvalPending, startApprovalTransition] = useTransition();
   const [drinksOpen, setDrinksOpen] = useState(true);
   const [ordersOpen, setOrdersOpen] = useState(true);
 
@@ -306,7 +296,7 @@ export function AdminDashboard({ store }: { store: StoreData }) {
     }));
   }
 
-  const filteredOrdersList = liveOrders(store.orders).filter((order) => {
+  const filteredOrdersList = store.orders.filter((order) => {
     const orderTime = new Date(order.createdAt).getTime();
     return orderTime >= startOfPeriod.getTime() && orderTime <= now.getTime();
   });
@@ -419,10 +409,6 @@ export function AdminDashboard({ store }: { store: StoreData }) {
       return orderTime >= startOfPeriod.getTime() && orderTime <= now.getTime();
     })
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const pendingVoidRequests = (store.voidRequests ?? []).filter(
-    (request) => request.status === "pending",
-  );
-
   const handleAddExpense = (e: React.FormEvent) => {
     e.preventDefault();
     if (!canEditLedgers || !newExpTitle || !newExpAmount) return;
@@ -553,66 +539,6 @@ export function AdminDashboard({ store }: { store: StoreData }) {
           </p>
         </div>
       </div>
-
-      {pendingVoidRequests.length > 0 ? (
-        <section className="border border-neutral-300 bg-white p-4 sm:p-5">
-          <div className="flex flex-wrap items-end justify-between gap-2 border-b border-neutral-200 pb-3">
-            <div>
-              <p className="text-[10px] tracking-[0.2em] text-neutral-500 uppercase sm:text-xs sm:tracking-[0.25em]">
-                Void approvals
-              </p>
-              <h2 className="mt-1 text-lg font-semibold">Requests waiting for admin</h2>
-            </div>
-            <span className="rounded-full bg-black px-3 py-1 text-xs font-medium text-white">
-              {pendingVoidRequests.length} pending
-            </span>
-          </div>
-
-          {approvalMessage ? (
-            <p className="mt-3 text-sm text-neutral-600">{approvalMessage}</p>
-          ) : null}
-
-          <div className="mt-4 grid gap-3 lg:grid-cols-2">
-            {pendingVoidRequests.map((request) => (
-              <article key={request.id} className="border border-neutral-200 bg-neutral-50 p-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold">{request.requestedByName}</p>
-                    <p className="mt-0.5 text-xs text-neutral-500">
-                      {phDateTimeLabel(request.requestedAt)}
-                      {request.orderId ? " · Existing ticket" : " · Current checkout"}
-                    </p>
-                  </div>
-                  <p className="shrink-0 text-sm font-semibold">{formatMoney(request.total)}</p>
-                </div>
-                <p className="mt-3 text-sm text-neutral-700">
-                  {request.items.map((item) => `${item.qty}× ${orderLineListLabel(item)}`).join(", ")}
-                </p>
-                <p className="mt-2 text-xs text-neutral-500">
-                  Reason: {request.reason}
-                </p>
-                <button
-                  type="button"
-                  disabled={approvalPending}
-                  onClick={() =>
-                    startApprovalTransition(async () => {
-                      const result = await approveVoidRequest(request.id);
-                      if ("error" in result && result.error) {
-                        setApprovalMessage(result.error);
-                        return;
-                      }
-                      setApprovalMessage(`Void approved for ${request.requestedByName}.`);
-                    })
-                  }
-                  className="mt-4 w-full rounded-lg bg-black px-4 py-2.5 text-xs font-medium text-white transition hover:bg-neutral-800 disabled:opacity-40"
-                >
-                  {approvalPending ? "Processing..." : "Approve void"}
-                </button>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
 
       <section className="space-y-6">
         <div className="border-b border-neutral-200 pb-3">
@@ -1069,13 +995,11 @@ export function AdminDashboard({ store }: { store: StoreData }) {
             </p>
           ) : (
           <div className="mt-4">
-            <div className="hidden grid-cols-8 gap-x-4 border-b border-neutral-200 pb-2 text-xs text-neutral-500 lg:grid">
+            <div className="hidden grid-cols-6 gap-x-4 border-b border-neutral-200 pb-2 text-xs text-neutral-500 lg:grid">
               <p className="min-w-0">Time</p>
               <p className="min-w-0">Cashier</p>
               <p className="min-w-0">Order ID</p>
               <p className="min-w-0">Items</p>
-              <p className="min-w-0">Status</p>
-              <p className="min-w-0">Reason</p>
               <p className="min-w-0">Payment</p>
               <p className="min-w-0 text-right">Total</p>
             </div>
@@ -1083,7 +1007,7 @@ export function AdminDashboard({ store }: { store: StoreData }) {
               {latest.map((order: Order, ordIdx: number) => (
                 <div
                   key={`${order.id}-${ordIdx}`}
-                  className="grid grid-cols-1 gap-2 py-3 lg:grid-cols-8 lg:items-start lg:gap-x-4"
+                  className="grid grid-cols-1 gap-2 py-3 lg:grid-cols-6 lg:items-start lg:gap-x-4"
                 >
                   <div className="min-w-0">
                     <p className="text-sm leading-5 text-neutral-700">
@@ -1097,24 +1021,12 @@ export function AdminDashboard({ store }: { store: StoreData }) {
                       })}
                     </p>
                     <p className="mt-0.5 text-xs text-neutral-500 lg:hidden">{order.baristaName}</p>
-                    {isVoided(order) ? (
-                      <p className="mt-0.5 text-sm font-medium text-neutral-400 line-through lg:hidden">
-                        {orderIdLabel(order)}
-                      </p>
-                    ) : (
-                      <p className="mt-0.5 text-sm font-medium lg:hidden">{orderIdLabel(order)}</p>
-                    )}
+                    <p className="mt-0.5 text-sm font-medium lg:hidden">{orderIdLabel(order)}</p>
                   </div>
                   <p className="hidden min-w-0 break-words text-sm text-neutral-700 lg:block">
                     {order.baristaName}
                   </p>
-                  <p className="hidden min-w-0 text-sm font-medium lg:block">
-                    {isVoided(order) ? (
-                      <span className="text-neutral-400 line-through">{orderIdLabel(order)}</span>
-                    ) : (
-                      orderIdLabel(order)
-                    )}
-                  </p>
+                  <p className="hidden min-w-0 text-sm font-medium lg:block">{orderIdLabel(order)}</p>
                   <ul className="min-w-0 list-disc space-y-1 pl-4 text-xs leading-relaxed text-neutral-600 lg:text-sm">
                     {order.items.map((item, itemIdx) => (
                       <li key={`${order.id}-${item.productId}-${itemIdx}`} className="break-words">
@@ -1127,21 +1039,6 @@ export function AdminDashboard({ store }: { store: StoreData }) {
                       </li>
                     ))}
                   </ul>
-                  <div className="min-w-0">
-                    <span
-                      className={`inline-flex rounded px-2 py-0.5 text-[10px] font-medium lg:text-xs ${
-                        isVoided(order)
-                          ? "bg-red-100 text-red-700"
-                          : "bg-black text-white"
-                      }`}
-                    >
-                      {isVoided(order) ? "Void" : "Completed"}
-                    </span>
-                  </div>
-                  <p className="min-w-0 break-words text-xs text-neutral-500 lg:text-sm">
-                    <span className="lg:hidden">Reason: </span>
-                    {isVoided(order) ? order.voidReason?.trim() || "—" : "—"}
-                  </p>
                   <p className="min-w-0 text-xs text-neutral-500 lg:text-sm">
                     <span className="lg:hidden">Payment: </span>
                     {paymentLabel(order.paymentMethod)}

@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import type { Session } from "@/lib/types";
 
-export const SESSION_COOKIE = "commune_session";
+export const SESSION_COOKIE = "coffeezz_session";
 
 export function encodeSession(session: Session): string {
   return btoa(JSON.stringify(session))

@@ -2,13 +2,13 @@ import fs from "fs";
 import path from "path";
 import { test, expect } from "@playwright/test";
 import { supabaseTestClient, e2eId } from "../e2e/utils";
-import { createOrderAtomic, voidOrderAtomic } from "@/lib/store";
+import { createOrderAtomic } from "@/lib/store";
 
 // KAN-124: public.sales is a reporting view over the authoritative
 // orders/order_items ledger - no dual writes, no backfill. These specs
 // prove existing orders appear, new atomic orders appear transactionally,
-// voided orders stay visible flagged, deleted orders disappear, line
-// detail is correct, and sales_date buckets to the PH calendar day.
+// deleted orders disappear, line detail is correct, and sales_date buckets
+// to the PH calendar day.
 // All rows use e2e-* ids and are cleaned up regardless of pass/fail.
 
 function ensureStoreEnv() {
@@ -27,7 +27,7 @@ function ensureStoreEnv() {
 ensureStoreEnv();
 
 test.describe("sales reporting view (KAN-124)", () => {
-  test("existing orders, transactional visibility, void and delete semantics", async () => {
+  test("existing orders, transactional visibility, and delete semantics", async () => {
     const supabase = supabaseTestClient();
     const orderId = e2eId("sales-order");
 
@@ -54,13 +54,11 @@ test.describe("sales reporting view (KAN-124)", () => {
             addons: [{ id: "shot", name: "Shot", price: 10, qty: 1 }],
           },
         ],
-        subtotal: 250,
-        discount: 10,
+        subtotal: 240,
         total: 240,
         paymentMethod: "cash",
-        paid: 250,
-        change: 10,
-        voided: false,
+        paid: 240,
+        change: 0,
       },
       deductions: [],
     });
@@ -79,10 +77,8 @@ test.describe("sales reporting view (KAN-124)", () => {
       expect(rowError, `sales row missing: ${rowError?.message}`).toBeNull();
       expect(row?.ticket_no).toBe(ticketNo);
       expect(Number(row?.total)).toBe(240);
-      expect(Number(row?.subtotal)).toBe(250);
-      expect(Number(row?.discount)).toBe(10);
+      expect(Number(row?.subtotal)).toBe(240);
       expect(row?.payment_method).toBe("cash");
-      expect(row?.voided).toBe(false);
       expect(Number(row?.qty_total)).toBe(2);
       const items = row?.items as { name?: string; qty?: number; price?: number; style?: string; addons?: unknown[] }[] | null;
       expect(items?.[0]?.name).toBe("E2E Sales Drink");
@@ -92,18 +88,6 @@ test.describe("sales reporting view (KAN-124)", () => {
       // sales_date is the PH calendar day of the order.
       const phToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila" }).format(new Date());
       expect(String(row?.sales_date)).toBe(phToday);
-
-      // Voided orders stay in the view, flagged - Admin analytics exclude
-      // them from totals the same way it filters liveOrders().
-      const voided = await voidOrderAtomic(orderId, "e2e void", "admin-1");
-      expect(voided.ok, `void failed: ${!voided.ok ? voided.error : ""}`).toBe(true);
-      const { data: voidedRow } = await supabase
-        .from("sales")
-        .select("voided, void_reason")
-        .eq("order_id", orderId)
-        .single();
-      expect(voidedRow?.voided).toBe(true);
-      expect(voidedRow?.void_reason).toBe("e2e void");
 
       // Deleted orders disappear - there is no sales row to leave behind.
       const { error: deleteError } = await supabase.rpc("delete_order_atomic", { p_order_id: orderId });

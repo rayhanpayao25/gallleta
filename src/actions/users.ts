@@ -10,16 +10,13 @@ import {
 } from "@/lib/auth";
 import {
   deleteLoginActivityRecords,
-  deleteOffRequestRecord,
   deleteStaffUserRecord,
   getStore,
   insertLoginActivityRecord,
-  insertOffRequestRecord,
   updateLoginActivityTimeRecord,
-  updateOffRequestStatusRecord,
   updateStore,
 } from "@/lib/store";
-import { phDateString, phIsoFromDateTimeInput } from "@/lib/datetime";
+import { phIsoFromDateTimeInput } from "@/lib/datetime";
 import { openBaristaShifts } from "@/lib/staff-sessions";
 import {
   canUsePos,
@@ -28,7 +25,7 @@ import {
   toSession,
 } from "@/lib/users";
 import { sanitizeLoginGate } from "@/lib/staff-gates";
-import type { LoginActivity, OffRequest, Role, StaffUser, StoreData } from "@/lib/types";
+import type { LoginActivity, Role, StaffUser, StoreData } from "@/lib/types";
 
 async function requireAdmin() {
   const session = await getSession();
@@ -406,58 +403,6 @@ export async function deleteStaffSession(input: { loginId?: string; logoutId?: s
   // logoutId), not the whole array - other sessions/users are untouched.
   await deleteLoginActivityRecords(ids);
 
-  refresh();
-  return { ok: true };
-}
-
-export async function createOffRequest(input: { userId?: string; date: string; reason: string }) {
-  const session = await getSession();
-  if (!session) return { error: "Sign in first." };
-  const date = phDateString(input.date);
-  const reason = input.reason.trim();
-  if (!date) return { error: "Pick a date." };
-  if (!reason) return { error: "Enter a reason." };
-
-  const asAdmin = session.role === "admin";
-  if (!asAdmin && session.role !== "cashier" && session.role !== "manager") {
-    return { error: "Only staff can request off." };
-  }
-
-  const store = await getStore();
-  const userId = asAdmin ? input.userId : session.userId;
-  const user = store.users.find((entry) => entry.id === userId);
-  if (!user || user.role === "admin") {
-    return { error: "Pick a staff member." };
-  }
-
-  await insertOffRequestRecord({
-    id: `off-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-    userId: user.id,
-    name: user.name,
-    date,
-    reason,
-    status: asAdmin ? "approved" : "pending",
-    createdAt: new Date().toISOString(),
-  });
-  refresh();
-  return { ok: true };
-}
-
-export async function setOffRequestStatus(id: string, status: OffRequest["status"]) {
-  await requireAdmin();
-  const store = await getStore();
-  const request = store.offRequests?.find((entry) => entry.id === id);
-  if (!request) {
-    return { error: "Request not found." };
-  }
-  await updateOffRequestStatusRecord(id, status);
-  refresh();
-  return { ok: true };
-}
-
-export async function deleteOffRequest(id: string) {
-  await requireAdmin();
-  await deleteOffRequestRecord(id);
   refresh();
   return { ok: true };
 }

@@ -3,26 +3,21 @@ import type {
   CostingItem,
   LoginActivity,
   MenuItem,
-  OffRequest,
   Order,
-  OrderItem,
   PrintJob,
-  Promotion,
   RecipeCosting,
   RecipeIngredient,
   Role,
   StaffUser,
   StoreData,
-  VoidRequest,
 } from "@/lib/types";
 import { roundQty } from "@/lib/inventory";
-import { DEFAULT_MENU, MENU_CATEGORIES, hydrateOrderLine, normalizeMenuAddons, normalizeMenuStyles, parseDrinkStyle, parseMenuImageOptions, parseStoredOrderAddons, stripMenuImage } from "@/lib/menu";
+import { DEFAULT_MENU, MENU_CATEGORIES, hydrateOrderLine, normalizeMenuAddons, normalizeMenuSizes, normalizeMenuStyles, parseDrinkStyle, parseMenuImageOptions, parseStoredOrderAddons, stripMenuImage } from "@/lib/menu";
 import { parsePayment } from "@/lib/payments";
 import { DEFAULT_LOGIN_GATES, normalizeLoginGates } from "@/lib/staff-gates";
-import { DEFAULT_PROMOS } from "@/lib/promos";
 import { DEFAULT_USERS, parseRole } from "@/lib/users";
 
-const POS_STATE_ID = "commune-coffee";
+const POS_STATE_ID = "coffeezz-coffee";
 
 let queue: Promise<unknown> = Promise.resolve();
 let memoryStore: StoreData | null = null;
@@ -92,7 +87,6 @@ function emptyStore(): StoreData {
     printJobs: [],
     menu: DEFAULT_MENU.map((item) => ({ ...item })),
     categories: [...MENU_CATEGORIES],
-    promotions: DEFAULT_PROMOS.map((item) => ({ ...item })),
     users: DEFAULT_USERS.map((item) => ({ ...item })),
     inventory: [],
   recipes: structuredClone(DEFAULT_RECIPES),
@@ -101,8 +95,6 @@ function emptyStore(): StoreData {
     restocks: [],
     costings: [],
     loginActivity: [],
-    offRequests: [],
-    voidRequests: [],
     loginGates: { ...DEFAULT_LOGIN_GATES },
   };
 }
@@ -143,8 +135,6 @@ function normalizeStore(store: StoreData): StoreData {
           ? order.items.filter((item) => item && typeof item === "object")
           : [],
         paymentMethod: parsePayment(order.paymentMethod),
-        voided: Boolean(order.voided),
-        voidReason: typeof order.voidReason === "string" ? order.voidReason : "",
       }))
       .map((order: Order) => ({
         ...order,
@@ -184,22 +174,13 @@ function normalizeStore(store: StoreData): StoreData {
         image: item.image || "/images/drinks.jpg",
         styles: normalizeMenuStyles(item),
         addons: normalizeMenuAddons(item),
+        sizes: normalizeMenuSizes(item.sizes),
       }));
   }
   store.categories = uniqueCategories([
     ...(Array.isArray(store.categories) ? store.categories : []),
     ...store.menu.map((item) => item.category),
   ]);
-  if (!Array.isArray(store.promotions) || store.promotions.length === 0) {
-    store.promotions = DEFAULT_PROMOS.map((item) => ({ ...item }));
-  } else {
-    store.promotions = store.promotions.map((item: Promotion) => ({
-      ...item,
-      active: item.active !== false,
-      type: item.type === "amount" ? "amount" : "percent",
-      value: Number(item.value) || 0,
-    }));
-  }
   if (!Array.isArray(store.inventory)) {
     store.inventory = [];
   } else {
@@ -291,22 +272,6 @@ function normalizeStore(store: StoreData): StoreData {
         (entry.type === "login" || entry.type === "logout"),
     );
   }
-  if (!Array.isArray(store.offRequests)) {
-    store.offRequests = [];
-  }
-  if (!Array.isArray(store.voidRequests)) {
-    store.voidRequests = [];
-  } else {
-    store.voidRequests = store.voidRequests.filter(
-      (request) =>
-        request &&
-        typeof request.id === "string" &&
-        (request.status === "pending" ||
-          request.status === "approved" ||
-          request.status === "denied") &&
-        Array.isArray(request.items),
-    );
-  }
   store.loginGates = normalizeLoginGates(store.loginGates);
 
 
@@ -330,7 +295,7 @@ function normalizeStore(store: StoreData): StoreData {
       store.users.push({
         id: "manager-1",
         username: managerUsernameTaken ? `manager-${Date.now().toString(36)}` : "manager",
-        password: "commune",
+        password: "coffeezz",
         name: "Manager",
         role: "manager",
         title: "Manager",
@@ -341,7 +306,7 @@ function normalizeStore(store: StoreData): StoreData {
       store.users.push({
         id: "barista-1",
         username: baristaUsernameTaken ? `barista-${Date.now().toString(36)}` : "barista",
-        password: "commune",
+        password: "coffeezz",
         name: "Barista",
         role: "barista",
         title: "Barista",
@@ -394,12 +359,11 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
   }
   const previousStore = memoryStore;
   const supabase = supabaseAdmin();
-  const [pos, users, categories, menu, promotions, inventory, orders, orderItems, usageLogs, restocks, costings, costingIngredients, recipes, recipeCostings, recipeCostingMenuItems, recipeCostingIngredients, loginActivity, offRequests, voidRequests] = await Promise.all([
+  const [pos, users, categories, menu, inventory, orders, orderItems, usageLogs, restocks, costings, costingIngredients, recipes, recipeCostings, recipeCostingMenuItems, recipeCostingIngredients, loginActivity] = await Promise.all([
     supabase.from("pos_state").select("*").eq("id", POS_STATE_ID).maybeSingle(),
     supabase.from("staff_users").select("*").order("created_at"),
-    supabase.from("menu_categories").select("*").order("name"),
-    supabase.from("menu_items").select("*").order("created_at"),
-    supabase.from("promotions").select("*").order("created_at"),
+    supabase.from("menu_categories").select("*").order("sort_order").order("name"),
+    supabase.from("menu_items").select("*").order("sort_order").order("created_at"),
     supabase.from("inventory_items").select("*").order("created_at"),
     supabase.from("orders").select("*").order("created_at", { ascending: false }),
     supabase.from("order_items").select("*").order("created_at"),
@@ -412,12 +376,8 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
     supabase.from("recipe_costing_menu_items").select("*").order("created_at"),
     supabase.from("recipe_costing_ingredients").select("*").order("created_at"),
     supabase.from("login_activity").select("*").order("at"),
-    supabase.from("off_requests").select("*").order("created_at"),
-    // Newest first, matching the historical unshift() ordering the UI
-    // already expects for request lists.
-    supabase.from("void_requests").select("*").order("requested_at", { ascending: false }),
   ]);
-  const firstError = [pos, users, categories, menu, promotions, inventory, orders, orderItems, usageLogs, restocks, costings, costingIngredients, recipes, recipeCostings, recipeCostingMenuItems, recipeCostingIngredients, loginActivity, offRequests, voidRequests].find((result) => result.error)?.error;
+  const firstError = [pos, users, categories, menu, inventory, orders, orderItems, usageLogs, restocks, costings, costingIngredients, recipes, recipeCostings, recipeCostingMenuItems, recipeCostingIngredients, loginActivity].find((result) => result.error)?.error;
   if (firstError) {
     const message = firstError.message;
     if (/JWT issued at future/i.test(message)) {
@@ -440,8 +400,7 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
     (categories.data ?? []).length === 0 &&
     (users.data ?? []).length === 0 &&
     (orders.data ?? []).length === 0 &&
-    (inventory.data ?? []).length === 0 &&
-    (promotions.data ?? []).length === 0;
+    (inventory.data ?? []).length === 0;
   if (virgin) {
     await seedInitialStore(supabase);
     return readStore({ ...options, fresh: true });
@@ -492,13 +451,14 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
         name: row.name,
         price: row.price,
         category,
+        sortOrder: row.sort_order,
         image: stripMenuImage(row.image),
         available: row.available,
         styles: normalizeMenuStyles({ category, styles: storedStyles.length > 0 ? storedStyles : legacy.styles }),
         addons: normalizeMenuAddons({ addons: storedAddons.length > 0 ? storedAddons : legacy.addons }),
+        sizes: normalizeMenuSizes(row.sizes),
       };
     }),
-    promotions: (promotions.data ?? []).map((row) => ({ id: row.id, label: row.label, type: row.type, value: row.value, active: row.active })),
     inventory: (inventory.data ?? []).map((row) => ({
       id: row.id,
       name: row.name,
@@ -521,18 +481,15 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
         qty: item.qty,
         price: item.price_snapshot,
         style: parseDrinkStyle(item.style),
+        size: item.size ?? undefined,
         addons: parseStoredOrderAddons(item.addons),
       })),
       subtotal: row.subtotal,
-      discount: row.discount,
-      promoLabel: row.promo_label ?? undefined,
       total: row.total,
       paymentMethod: parsePayment(row.payment_method),
       ticketNo: row.ticket_no,
       paid: row.paid,
       change: row.change,
-      voided: row.voided,
-      voidReason: row.void_reason ?? undefined,
     })),
     usageLogs: (usageLogs.data ?? []).map((row) => ({ id: row.id, orderId: row.order_id ?? "", orderItemId: row.order_item_id ?? "", inventoryItemId: row.inventory_item_id ?? undefined, date: row.created_at, itemName: row.item_name_snapshot, usedAmount: Number(row.used_amount), unit: row.unit })),
     restocks: (restocks.data ?? []).map((row) => ({ id: row.id, inventoryItemId: row.inventory_item_id ?? undefined, itemName: row.item_name_snapshot, quantityAdded: Number(row.quantity_added), purchaseQty: row.purchase_qty == null ? undefined : Number(row.purchase_qty), purchaseUnit: row.purchase_unit ?? undefined, date: row.created_at })),
@@ -562,6 +519,8 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
       hotCupInventoryItemId: row.hot_cup_inventory_item_id ?? undefined,
       icedCupInventoryItemId: row.iced_cup_inventory_item_id ?? undefined,
       otherCupInventoryItemId: row.other_cup_inventory_item_id ?? undefined,
+      smallCupInventoryItemId: row.small_cup_inventory_item_id ?? undefined,
+      largeCupInventoryItemId: row.large_cup_inventory_item_id ?? undefined,
     })),
     // Explicit `at` ordering above (not relying on unspecified row order);
     // pairLoginSessions()/openBaristaShifts() re-sort chronologically anyway.
@@ -579,19 +538,6 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
       type: row.type,
       at: row.at,
     })),
-    // created_at ordering (not relying on unspecified row order); the UI
-    // re-sorts by date/createdAt in JS regardless. Same user_id fallback
-    // rationale as loginActivity above.
-    offRequests: (offRequests.data ?? []).map((row) => ({
-      id: row.id,
-      userId: row.user_id ?? row.id,
-      name: row.name,
-      date: row.date,
-      reason: row.reason,
-      status: row.status,
-      createdAt: row.created_at,
-    })),
-    voidRequests: (voidRequests.data ?? []).map(voidRequestFromRow),
   });
   if (previousStore) {
     // These keys have no backing table - they only exist in this in-process
@@ -657,15 +603,11 @@ async function writeStore(store: StoreData): Promise<void> {
     created_at: order.createdAt,
     barista_name: order.baristaName,
     subtotal: order.subtotal ?? order.total,
-    discount: order.discount ?? 0,
-    promo_label: order.promoLabel ?? null,
     total: order.total,
     payment_method: order.paymentMethod ?? "cash",
     ticket_no: order.ticketNo ?? "",
     paid: order.paid ?? order.total,
     change: order.change ?? 0,
-    voided: order.voided ?? false,
-    void_reason: order.voidReason ?? null,
   }));
 
   // Admin-side removal only changes the current application view.
@@ -707,7 +649,6 @@ async function writeStore(store: StoreData): Promise<void> {
       })),
       { onConflict: "id" },
     ),
-    supabase.from("promotions").upsert(store.promotions.map((promo) => ({ id: promo.id, label: promo.label, type: promo.type, value: Math.round(promo.value), active: promo.active })), { onConflict: "id" }),
     supabase.from("inventory_items").upsert(store.inventory.map((item) => ({
       id: item.id,
       name: item.name,
@@ -720,7 +661,7 @@ async function writeStore(store: StoreData): Promise<void> {
       cup_usage_amount: item.cupUsageAmount ?? null,
       cups_make: item.cupsMake ?? null,
     })), { onConflict: "id" }),
-    supabase.from("order_items").upsert(store.orders.flatMap((order) => order.items.map((item, index) => ({ id: `${order.id}-item-${index + 1}`, order_id: order.id, menu_item_id: menuIds.has(item.productId) ? item.productId : null, product_id_snapshot: item.productId, name_snapshot: item.name, qty: item.qty, price_snapshot: item.price, style: item.style ?? null, addons: item.addons ?? [] }))), { onConflict: "id" }),
+    supabase.from("order_items").upsert(store.orders.flatMap((order) => order.items.map((item, index) => ({ id: `${order.id}-item-${index + 1}`, order_id: order.id, menu_item_id: menuIds.has(item.productId) ? item.productId : null, product_id_snapshot: item.productId, name_snapshot: item.name, qty: item.qty, price_snapshot: item.price, style: item.style ?? null, size: item.size ?? null, addons: item.addons ?? [] }))), { onConflict: "id" }),
     supabase.from("usage_logs").upsert(store.usageLogs.map((log) => ({ id: log.id, order_id: log.orderId || null, order_item_id: log.orderItemId || null, item_name_snapshot: log.itemName, used_amount: log.usedAmount, unit: log.unit, ...(log.inventoryItemId ? { inventory_item_id: log.inventoryItemId } : {}) })), { onConflict: "id" }),
     supabase.from("restocks").upsert(store.restocks.map((record) => ({ id: record.id, item_name_snapshot: record.itemName, quantity_added: record.quantityAdded, ...(record.inventoryItemId ? { inventory_item_id: record.inventoryItemId } : {}), ...(record.purchaseQty != null ? { purchase_qty: record.purchaseQty } : {}), ...(record.purchaseUnit ? { purchase_unit: record.purchaseUnit } : {}) })), { onConflict: "id" }),
   ]);
@@ -736,9 +677,10 @@ async function writeStore(store: StoreData): Promise<void> {
 async function seedInitialStore(
   supabase: ReturnType<typeof supabaseAdmin>,
 ): Promise<void> {
-  const categoryRows = MENU_CATEGORIES.map((name) => ({
+  const categoryRows = MENU_CATEGORIES.map((name, sort_order) => ({
     id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "other",
     name,
+    sort_order,
   }));
   const categoryId = new Map(
     categoryRows.map((row) => [row.name.toLowerCase(), row.id]),
@@ -753,15 +695,6 @@ async function seedInitialStore(
         name: user.name,
         role: user.role === "admin" ? "admin" : "barista",
         title: user.title,
-      })),
-    ),
-    supabase.from("promotions").insert(
-      DEFAULT_PROMOS.map((promo) => ({
-        id: promo.id,
-        label: promo.label,
-        type: promo.type,
-        value: Math.round(promo.value),
-        active: promo.active,
       })),
     ),
     supabase.from("pos_state").upsert({
@@ -781,11 +714,13 @@ async function seedInitialStore(
       id: item.id,
       name: item.name,
       price: Math.round(item.price),
+      sort_order: item.sortOrder ?? 1000,
       category_id: categoryId.get(item.category.toLowerCase()) ?? "other",
       image: stripMenuImage(item.image),
       available: item.available,
       styles: normalizeMenuStyles(item),
       addons: normalizeMenuAddons(item),
+      sizes: normalizeMenuSizes(item.sizes),
     })),
   );
   if (menuError) {
@@ -813,7 +748,7 @@ export function getStore(): Promise<StoreData> {
 }
 
 // Validation that must not run against a stale snapshot (e.g. checking
-// whether an order is already voided before inserting a related row).
+// whether an order exists before inserting a related row).
 export function getFreshStore(): Promise<StoreData> {
   return withStore((store) => store, { fresh: true });
 }
@@ -893,12 +828,11 @@ export async function deleteRestockRecord(id: string): Promise<void> {
 // that were just atomically committed (known with certainty, since the RPC
 // is all-or-nothing) rather than invalidating, specifically so printJobs -
 // which have no backing table and only ever live in memoryStore - survive
-// long enough for the immediately-following print flow to use them. Void/
-// delete/restock/rename are lower-frequency admin operations whose exact
-// resulting state (e.g. how much inventory a void restores) isn't already
-// known on the TypeScript side without an extra read, so those invalidate
-// memoryStore instead of risking a hand-patched value drifting from what
-// the transaction actually committed.
+// long enough for the immediately-following print flow to use them. Delete,
+// restock, and rename are lower-frequency admin operations whose exact
+// resulting state isn't already known on the TypeScript side without an extra
+// read, so those invalidate memoryStore instead of risking a hand-patched
+// value drifting from what the transaction actually committed.
 
 export async function appendPrintJobs(jobs: PrintJob[]): Promise<void> {
   if (jobs.length === 0) return;
@@ -910,7 +844,6 @@ export async function appendPrintJobs(jobs: PrintJob[]): Promise<void> {
 export async function createOrderAtomic(input: {
   order: Order;
   deductions: { inventoryItemId: string; itemName: string; amount: number; unit: string; orderItemId?: string }[];
-  voidedBy?: string | null;
 }): Promise<{ ok: true; ticketNo: string } | { ok: false; error: string }> {
   return enqueue(async () => {
     const supabase = supabaseAdmin();
@@ -922,9 +855,6 @@ export async function createOrderAtomic(input: {
       p_barista_user_id: null,
       p_items: order.items,
       p_subtotal: order.subtotal ?? order.total,
-      p_discount: order.discount ?? 0,
-      p_promo_id: null,
-      p_promo_label: order.promoLabel ?? null,
       p_total: order.total,
       p_payment_method: order.paymentMethod ?? "cash",
       // The RPC allocates the ticket number itself on a per-PH-day counter;
@@ -933,9 +863,6 @@ export async function createOrderAtomic(input: {
       p_paid: order.paid ?? order.total,
       p_change: order.change ?? 0,
       p_deductions: deductions,
-      p_voided: order.voided ?? false,
-      p_void_reason: order.voidReason ?? null,
-      p_voided_by: input.voidedBy ?? null,
     });
     if (error) {
       const insufficient = /INSUFFICIENT_STOCK:(.+)/.exec(error.message);
@@ -965,45 +892,6 @@ export async function createOrderAtomic(input: {
       memoryStore.usageLogs = now;
     }
     return { ok: true, ticketNo: data?.ticketNo ?? "" };
-  });
-}
-
-export async function voidOrderAtomic(
-  orderId: string,
-  reason: string,
-  voidedBy: string | null,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  return enqueue(async () => {
-    const supabase = supabaseAdmin();
-    const { data, error } = await supabase.rpc("void_order_atomic", {
-      p_order_id: orderId,
-      p_reason: reason,
-      p_voided_by: voidedBy,
-    });
-    if (error) throw new Error(`Unable to void order: ${error.message}`);
-    if (!data?.ok) {
-      return {
-        ok: false,
-        error: data?.error === "ALREADY_VOIDED" ? "Ticket is already voided." : "Ticket not found.",
-      };
-    }
-    // printJobs has no backing table, so cancel matching pending/failed jobs
-    // here (same behavior as the old markOrderVoided) before the
-    // memoryStore invalidation below would otherwise silently drop it.
-    if (memoryStore) {
-      const updatedAt = new Date().toISOString();
-      for (const job of memoryStore.printJobs) {
-        if (job.orderId === orderId && (job.status === "pending" || job.status === "failed")) {
-          job.status = "cancelled";
-          job.updatedAt = updatedAt;
-          job.lastError = "Order was voided.";
-        }
-      }
-    }
-    // Inventory restoration amounts are server-computed from usage_logs;
-    // invalidate rather than recompute the same lookup a second time here.
-    invalidateStoreCache();
-    return { ok: true };
   });
 }
 
@@ -1219,7 +1107,7 @@ async function ensureMenuCategoryId(
   const id = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "other";
   const { error } = await supabase
     .from("menu_categories")
-    .insert({ id, name: trimmed });
+    .insert({ id, name: trimmed, sort_order: 1000 });
   if (error) {
     // Another instance may have created it between the lookup and insert.
     const { data: retry } = await supabase
@@ -1251,11 +1139,13 @@ export async function upsertMenuItemRecord(item: MenuItem): Promise<void> {
         id: item.id,
         name: item.name,
         price: Math.round(item.price),
+        sort_order: item.sortOrder ?? 1000,
         category_id: categoryId,
         image: stripMenuImage(item.image),
         available: item.available,
         styles: normalizeMenuStyles(item),
         addons: normalizeMenuAddons(item),
+        sizes: normalizeMenuSizes(item.sizes),
       },
       { onConflict: "id" },
     );
@@ -1288,7 +1178,7 @@ export async function insertMenuCategoryRecord(
     const id = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "other";
     const { error } = await supabase
       .from("menu_categories")
-      .insert({ id, name: trimmed });
+      .insert({ id, name: trimmed, sort_order: 1000 });
     if (error) {
       throw new Error(`Unable to create menu category: ${error.message}`);
     }
@@ -1395,6 +1285,8 @@ export async function saveRecipeCostingRecord(costing: RecipeCosting): Promise<v
       p_hot_cup_inventory_item_id: costing.hotCupInventoryItemId ?? null,
       p_iced_cup_inventory_item_id: costing.icedCupInventoryItemId ?? null,
       p_other_cup_inventory_item_id: costing.otherCupInventoryItemId ?? null,
+      p_small_cup_inventory_item_id: costing.smallCupInventoryItemId ?? null,
+      p_large_cup_inventory_item_id: costing.largeCupInventoryItemId ?? null,
       p_menu_items: costing.menuItems,
       p_ingredients: costing.ingredients,
     });
@@ -1477,180 +1369,6 @@ export async function deleteLoginActivityRecords(ids: string[]): Promise<void> {
     if (memoryStore) {
       const idSet = new Set(ids);
       memoryStore.loginActivity = memoryStore.loginActivity.filter((item) => !idSet.has(item.id));
-    }
-  });
-}
-
-// off_requests ---------------------------------------------------------------
-//
-// Targeted insert/update/delete, not a blanket rewrite - same reasoning as
-// login_activity above.
-
-export async function insertOffRequestRecord(entry: OffRequest): Promise<void> {
-  await enqueue(async () => {
-    const supabase = supabaseAdmin();
-    const { error } = await supabase.from("off_requests").insert({
-      id: entry.id,
-      user_id: entry.userId,
-      name: entry.name,
-      date: entry.date,
-      reason: entry.reason,
-      status: entry.status,
-      created_at: entry.createdAt,
-    });
-    if (error) throw new Error(`Unable to create off request: ${error.message}`);
-    if (memoryStore) {
-      if (!Array.isArray(memoryStore.offRequests)) memoryStore.offRequests = [];
-      if (!memoryStore.offRequests.some((item) => item.id === entry.id)) {
-        memoryStore.offRequests.unshift(entry);
-      }
-    }
-  });
-}
-
-export async function updateOffRequestStatusRecord(id: string, status: OffRequest["status"]): Promise<void> {
-  await enqueue(async () => {
-    const supabase = supabaseAdmin();
-    const { error } = await supabase.from("off_requests").update({ status }).eq("id", id);
-    if (error) throw new Error(`Unable to update off request: ${error.message}`);
-    if (memoryStore) {
-      const entry = memoryStore.offRequests.find((item) => item.id === id);
-      if (entry) entry.status = status;
-    }
-  });
-}
-
-export async function deleteOffRequestRecord(id: string): Promise<void> {
-  await enqueue(async () => {
-    const supabase = supabaseAdmin();
-    const { error } = await supabase.from("off_requests").delete().eq("id", id);
-    if (error) throw new Error(`Unable to delete off request: ${error.message}`);
-    if (memoryStore) {
-      memoryStore.offRequests = memoryStore.offRequests.filter((item) => item.id !== id);
-    }
-  });
-}
-
-// void_requests ---------------------------------------------------------------
-//
-// Same targeted-write pattern as off_requests. Supabase is the durable
-// source of truth so the approval workflow is visible across server
-// instances; memoryStore only mirrors rows for TTL-window consistency.
-//
-// requested_by_id falls back to the row's own id when the staff account
-// was deleted (ON DELETE SET NULL), same rationale as offRequests.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function voidRequestFromRow(row: any): VoidRequest {
-  return {
-    id: row.id,
-    requestedAt: row.requested_at,
-    requestedById: row.requested_by_id ?? row.id,
-    requestedByName: row.requested_by_name,
-    reason: row.reason,
-    status: row.status,
-    orderId: row.order_id ?? undefined,
-    items: Array.isArray(row.items) ? (row.items as OrderItem[]) : [],
-    subtotal: Number(row.subtotal),
-    discount: Number(row.discount),
-    promoLabel: row.promo_label ?? undefined,
-    total: Number(row.total),
-    paymentMethod: parsePayment(row.payment_method),
-    approvedAt: row.approved_at ?? undefined,
-    approvedByName: row.approved_by_name ?? undefined,
-    processedOrderId: row.processed_order_id ?? undefined,
-  };
-}
-
-export async function insertVoidRequestRecord(entry: VoidRequest): Promise<void> {
-  await enqueue(async () => {
-    const supabase = supabaseAdmin();
-    const { error } = await supabase.from("void_requests").insert({
-      id: entry.id,
-      requested_at: entry.requestedAt,
-      requested_by_id: entry.requestedById,
-      requested_by_name: entry.requestedByName,
-      reason: entry.reason,
-      status: entry.status,
-      order_id: entry.orderId ?? null,
-      items: entry.items,
-      subtotal: entry.subtotal,
-      discount: entry.discount,
-      promo_label: entry.promoLabel ?? null,
-      total: entry.total,
-      payment_method: entry.paymentMethod,
-    });
-    if (error) throw new Error(`Unable to create void request: ${error.message}`);
-    if (memoryStore) {
-      if (!Array.isArray(memoryStore.voidRequests)) memoryStore.voidRequests = [];
-      if (!memoryStore.voidRequests.some((item) => item.id === entry.id)) {
-        memoryStore.voidRequests.unshift(entry);
-      }
-    }
-  });
-}
-
-// Direct row read for status polling and approval - deliberately bypasses
-// the 5s store cache so a cashier polling on one instance sees an approval
-// made on another instance immediately.
-export async function getVoidRequestRecord(id: string): Promise<VoidRequest | null> {
-  return enqueue(async () => {
-    const supabase = supabaseAdmin();
-    const { data, error } = await supabase
-      .from("void_requests")
-      .select("*")
-      .eq("id", id)
-      .maybeSingle();
-    if (error) throw new Error(`Unable to read void request: ${error.message}`);
-    return data ? voidRequestFromRow(data) : null;
-  });
-}
-
-// approve_void_request_atomic performs the request status update AND the
-// order effect (void existing order / create pre-voided order) in a single
-// DB transaction, so the approval cannot partially apply across instances.
-export async function approveVoidRequestAtomic(input: {
-  requestId: string;
-  approvedById: string;
-  approvedByName: string;
-  newOrderId?: string | null;
-}): Promise<{ ok: true; processedOrderId: string } | { ok: false; error: string }> {
-  return enqueue(async () => {
-    const supabase = supabaseAdmin();
-    const { data, error } = await supabase.rpc("approve_void_request_atomic", {
-      p_request_id: input.requestId,
-      p_approved_by_id: input.approvedById,
-      p_approved_by_name: input.approvedByName,
-      p_new_order_id: input.newOrderId ?? null,
-      // p_ticket_no is omitted: the RPC allocates the ticket itself for a
-      // pre-checkout approval, in the same transaction as the order insert.
-    });
-    if (error) throw new Error(`Unable to approve void request: ${error.message}`);
-    if (!data?.ok) {
-      const code = data?.error;
-      return {
-        ok: false,
-        error:
-          code === "ALREADY_APPROVED"
-            ? "Void request is already approved."
-            : code === "ALREADY_VOIDED"
-              ? "Ticket is already voided."
-              : "Void request not found.",
-      };
-    }
-    // The RPC changed orders/inventory server-side; invalidate rather than
-    // recompute the same lookups locally (same approach as voidOrderAtomic).
-    invalidateStoreCache();
-    return { ok: true, processedOrderId: data.processedOrderId };
-  });
-}
-
-export async function deleteVoidRequestRecord(id: string): Promise<void> {
-  await enqueue(async () => {
-    const supabase = supabaseAdmin();
-    const { error } = await supabase.from("void_requests").delete().eq("id", id);
-    if (error) throw new Error(`Unable to delete void request: ${error.message}`);
-    if (memoryStore) {
-      memoryStore.voidRequests = memoryStore.voidRequests.filter((item) => item.id !== id);
     }
   });
 }

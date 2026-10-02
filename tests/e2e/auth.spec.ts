@@ -7,7 +7,7 @@ test("admin login -> dashboard -> logout -> redirect to /mouna1233", async ({ pa
   await page.goto(ADMIN_URL, { waitUntil: "domcontentloaded" });
   await page.fill('input[name="username"]', ADMIN_USERNAME);
   await page.fill('input[name="password"]', ADMIN_PASSWORD);
-  await page.click('button:has-text("Enter commune")');
+  await page.click('button:has-text("Enter Coffee ZZ")');
 
   await page.waitForURL("**/admin", { timeout: 15000 });
   await expect(page.locator("text=Sales analysis")).toBeVisible({ timeout: 15000 });
@@ -25,7 +25,7 @@ test("cashier login -> POS -> logout -> redirect to /sale1803", async ({ page })
   await page.goto(CASHIER_URL, { waitUntil: "domcontentloaded" });
   await page.fill('input[name="username"]', CASHIER_USERNAME);
   await page.fill('input[name="password"]', CASHIER_PASSWORD);
-  await page.click('button:has-text("Enter commune")');
+  await page.click('button:has-text("Enter Coffee ZZ")');
 
   await page.waitForURL("**/pos", { timeout: 15000 });
   await expect(page.locator('[aria-label="Open menu"]')).toBeVisible({ timeout: 15000 });

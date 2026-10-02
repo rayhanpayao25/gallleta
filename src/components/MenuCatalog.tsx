@@ -10,8 +10,8 @@ import {
   setMenuItemAvailable,
   updateMenuItem,
 } from "@/actions/menu";
-import { addonIdFromName, DRINK_STYLES, drinkStyleLabel, drinkStyleLabelList, formatMoney, isFoodOrPastry, normalizeMenuAddons, normalizeMenuStyles } from "@/lib/menu";
-import type { DrinkStyle, InventoryItem, MenuAddon, MenuItem } from "@/lib/types";
+import { addonIdFromName, drinkStyleLabelList, formatMoney, normalizeMenuAddons, normalizeMenuSizes } from "@/lib/menu";
+import type { InventoryItem, MenuAddon, MenuItem, MenuSize } from "@/lib/types";
 
 type MenuCatalogProps = {
   menu: MenuItem[];
@@ -100,10 +100,9 @@ export function MenuCatalog({ menu, categories, inventory = [] }: MenuCatalogPro
   const [filter, setFilter] = useState("All");
   const [editingId, setEditingId] = useState<string | "new" | null>(null);
   const [itemName, setItemName] = useState("");
-  const [itemPrice, setItemPrice] = useState("");
+  const [itemSizes, setItemSizes] = useState<MenuSize[]>([]);
   const [itemCategory, setItemCategory] = useState("");
   const [itemAvailable, setItemAvailable] = useState(true);
-  const [itemStyles, setItemStyles] = useState<DrinkStyle[]>([]);
   const [itemAddons, setItemAddons] = useState<MenuAddon[]>([]);
 
   const counts = useMemo(() => {
@@ -117,10 +116,16 @@ export function MenuCatalog({ menu, categories, inventory = [] }: MenuCatalogPro
 
   const visibleItems = useMemo(() => {
     const needle = filter.toLowerCase();
+    const categoryOrder = new Map(categories.map((category, index) => [category.toLowerCase(), index]));
     return menu
       .filter((item) => filter === "All" || item.category.toLowerCase() === needle)
-      .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
-  }, [menu, filter]);
+      .sort((a, b) =>
+        (categoryOrder.get(a.category.toLowerCase()) ?? Number.MAX_SAFE_INTEGER) -
+          (categoryOrder.get(b.category.toLowerCase()) ?? Number.MAX_SAFE_INTEGER) ||
+        (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER) ||
+        a.name.localeCompare(b.name),
+      );
+  }, [menu, filter, categories]);
 
   function flash(message: string | null) {
     setNotice(message);
@@ -129,10 +134,14 @@ export function MenuCatalog({ menu, categories, inventory = [] }: MenuCatalogPro
   function startCreateItem() {
     setEditingId("new");
     setItemName("");
-    setItemPrice("");
-    setItemCategory(filter !== "All" ? filter : categories[0] ?? "");
+    const initialCategory = filter !== "All" ? filter : categories[0] ?? "";
+    setItemCategory(initialCategory);
+    setItemSizes(
+      initialCategory === "Frappe Series"
+        ? [{ label: "22oz", price: 0 }]
+        : [{ label: "16oz", price: 0 }, { label: "22oz", price: 0 }],
+    );
     setItemAvailable(true);
-    setItemStyles([]);
     setItemAddons([]);
     setNotice(null);
     setTab("items");
@@ -141,10 +150,15 @@ export function MenuCatalog({ menu, categories, inventory = [] }: MenuCatalogPro
   function startEditItem(item: MenuItem) {
     setEditingId(item.id);
     setItemName(item.name);
-    setItemPrice(String(item.price));
     setItemCategory(item.category);
+    setItemSizes(
+      normalizeMenuSizes(item.sizes).length > 0
+        ? normalizeMenuSizes(item.sizes)
+        : item.category === "Frappe Series"
+          ? [{ label: "22oz", price: item.price }]
+          : [{ label: "16oz", price: item.price }, { label: "22oz", price: item.price }],
+    );
     setItemAvailable(item.available !== false);
-    setItemStyles(normalizeMenuStyles(item));
     setItemAddons(normalizeMenuAddons(item));
     setNotice(null);
     setTab("items");
@@ -158,11 +172,11 @@ export function MenuCatalog({ menu, categories, inventory = [] }: MenuCatalogPro
     const data = new FormData();
     if (editingId && editingId !== "new") data.set("id", editingId);
     data.set("name", itemName);
-    data.set("price", itemPrice);
+    data.set("price", String(itemSizes[0]?.price ?? ""));
+    data.set("sizes", JSON.stringify(itemSizes));
     data.set("category", itemCategory);
     data.set("available", itemAvailable ? "true" : "false");
     data.set("stylesField", "1");
-    for (const style of itemStyles) data.append("styles", style);
     data.set("addons", JSON.stringify(itemAddons.filter((addon) => addon.name.trim())));
     return data;
   }
@@ -405,22 +419,10 @@ export function MenuCatalog({ menu, categories, inventory = [] }: MenuCatalogPro
                     Cancel
                   </button>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-3">
+                <div className="grid gap-3 sm:grid-cols-2">
                   <label className="text-xs font-medium text-neutral-600">
                     <span className="mb-1.5 block">Name</span>
                     <input value={itemName} onChange={(event) => setItemName(event.target.value)} className={field} required />
-                  </label>
-                  <label className="text-xs font-medium text-neutral-600">
-                    <span className="mb-1.5 block">Price</span>
-                    <input
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={itemPrice}
-                      onChange={(event) => setItemPrice(event.target.value)}
-                      className={field}
-                      required
-                    />
                   </label>
                   <label className="text-xs font-medium text-neutral-600">
                     <span className="mb-1.5 block">Category</span>
@@ -429,7 +431,18 @@ export function MenuCatalog({ menu, categories, inventory = [] }: MenuCatalogPro
                       onChange={(event) => {
                         const next = event.target.value;
                         setItemCategory(next);
-                        if (isFoodOrPastry(next)) setItemStyles([]);
+                        setItemSizes((current) => {
+                          if (next === "Frappe Series") {
+                            const large = current.find((size) => size.label === "22oz") ?? current[0];
+                            return [{ label: "22oz", price: large?.price ?? 0 }];
+                          }
+                          const small = current.find((size) => size.label === "16oz") ?? current[0];
+                          const large = current.find((size) => size.label === "22oz") ?? current[0];
+                          return [
+                            { label: "16oz", price: small?.price ?? 0 },
+                            { label: "22oz", price: large?.price ?? 0 },
+                          ];
+                        });
                       }}
                       className={field}
                       required
@@ -445,31 +458,36 @@ export function MenuCatalog({ menu, categories, inventory = [] }: MenuCatalogPro
                     </select>
                   </label>
                 </div>
-                {!isFoodOrPastry(itemCategory) ? (
-                  <div>
-                    <p className="mb-1.5 text-xs font-medium text-neutral-600">Type</p>
-                    <div className="flex gap-2">
-                      {DRINK_STYLES.map((style) => {
-                        const on = itemStyles.includes(style);
-                        return (
-                          <button
-                            key={style}
-                            type="button"
-                            onClick={() =>
-                              setItemStyles((current) =>
-                                on ? current.filter((entry) => entry !== style) : [...current, style],
-                              )
-                            }
-                            className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
-                              on ? "border-black bg-black text-white" : "border-neutral-200 bg-white text-neutral-600"
-                            }`}
-                          >
-                            {drinkStyleLabel(style)}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {itemSizes.map((size) => (
+                    <label key={size.label} className="text-xs font-medium text-neutral-600">
+                      <span className="mb-1.5 block">{size.label} price</span>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={size.price || ""}
+                        onChange={(event) => {
+                          const price = Number(event.target.value);
+                          setItemSizes((current) =>
+                            current.map((entry) =>
+                              entry.label === size.label
+                                ? { ...entry, price: Number.isFinite(price) ? price : 0 }
+                                : entry,
+                            ),
+                          );
+                        }}
+                        className={field}
+                        required
+                      />
+                    </label>
+                  ))}
+                </div>
+                {itemCategory === "Frappe Series" ? (
+                  <p className="text-xs text-neutral-500">Frappe items are available in 22oz only.</p>
+                ) : null}
+                {!itemCategory ? (
+                  <p className="text-xs text-neutral-500">Choose a series to enter its cup sizes.</p>
                 ) : null}
                 <div>
                   <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -631,8 +649,8 @@ export function MenuCatalog({ menu, categories, inventory = [] }: MenuCatalogPro
                   <tr className="border-b border-neutral-200 text-xs font-medium tracking-wide text-neutral-400 uppercase">
                     <th className="px-4 py-3">Item</th>
                     <th className="px-4 py-3">Category</th>
-                    <th className="px-4 py-3">Type</th>
-                    <th className="px-4 py-3 text-right">Price</th>
+                    <th className="px-4 py-3">Sizes</th>
+                    <th className="px-4 py-3 text-right">Prices</th>
                     <th className="px-4 py-3">Status</th>
                     <th className="sticky right-0 bg-white px-3 py-3 text-right"> </th>
                   </tr>
@@ -666,8 +684,19 @@ export function MenuCatalog({ menu, categories, inventory = [] }: MenuCatalogPro
                           ) : null}
                         </td>
                         <td className="px-4 py-3 text-neutral-500">{item.category}</td>
-                        <td className="px-4 py-3 text-neutral-500">{drinkStyleLabelList(item)}</td>
-                        <td className="px-4 py-3 text-right">{formatMoney(item.price)}</td>
+                        <td className="px-4 py-3 text-neutral-500">
+                          {normalizeMenuSizes(item.sizes).map((size) => size.label).join(", ") || drinkStyleLabelList(item)}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex justify-end gap-2">
+                            {normalizeMenuSizes(item.sizes).map((size) => (
+                              <span key={size.label} className="min-w-14 rounded-md bg-neutral-100 px-2 py-1 text-center text-xs">
+                                <span className="block text-[10px] text-neutral-500">{size.label}</span>
+                                <span className="font-medium">{formatMoney(size.price)}</span>
+                              </span>
+                            ))}
+                          </div>
+                        </td>
                         <td className="px-4 py-3">
                           <span className={`text-xs ${item.available !== false ? "text-neutral-900" : "text-neutral-400"}`}>
                             {item.available !== false ? "On" : "Hidden"}
