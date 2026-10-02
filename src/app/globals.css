@@ -36,19 +36,3 @@ body {
   background: #fff;
   color: #000;
 }
-
-@media print {
-  body {
-    background: #fff !important;
-    color: #000 !important;
-    overflow: visible;
-  }
-
-  .pos-screen {
-    display: none !important;
-  }
-
-  .pos-receipt {
-    display: block !important;
-  }
-}

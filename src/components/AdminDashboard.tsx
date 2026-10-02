@@ -519,14 +519,6 @@ export function AdminDashboard({ store }: { store: StoreData }) {
             />
           </div>
 
-          <button
-            type="button"
-            onClick={() => window.print()}
-            className="rounded-lg bg-black px-4 py-2 text-xs font-medium text-white transition hover:bg-neutral-800 shadow-sm"
-          >
-            Download PDF Sales
-          </button>
-
           <p
             className={`w-fit rounded-full px-4 py-2 text-sm ${
               store.pos.isOpen

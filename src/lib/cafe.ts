@@ -1,6 +1,6 @@
 export const CAFE = {
   name: "COFFEE ZZ",
-  tagline: "WE GATHER, OVER COFFEE",
+  tagline: "ICED DRINKS AND MORE",
   hours: "9:00AM - 10:00PM",
   hoursNote: "DAILY",
   street: "Suterville",

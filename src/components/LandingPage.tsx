@@ -70,9 +70,9 @@ export function LandingPage({
             have a seat, take a sip
           </p>
           <h1 className="font-display mt-3 max-w-5xl text-[2.7rem] leading-[0.9] tracking-[0.08em] text-white uppercase drop-shadow-[0_10px_30px_rgba(0,0,0,0.65)] sm:mt-5 sm:text-7xl sm:tracking-[0.12em] md:text-8xl">
-            We gather,
+            Iced drinks
             <br />
-            over coffee
+            and more
           </h1>
           <div className="mt-5 sm:mt-7">
             <p className="text-[10px] tracking-[0.28em] text-white/55 uppercase">
@@ -158,7 +158,7 @@ export function LandingPage({
           <div>
             <Eyebrow>Best Sellers</Eyebrow>
             <h2 className="mt-4 font-serif text-4xl italic sm:text-5xl">
-              We gather, over coffee
+              ICED DRINKS AND MORE
             </h2>
             <p className="mt-4 max-w-md text-neutral-400">
               Signatures from the bar: iced, crumbled, and pulled to share.

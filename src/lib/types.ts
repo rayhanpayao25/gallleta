@@ -74,30 +74,6 @@ export type Order = {
   recordType?: "Sale" | "Purchase";
 };
 
-export type PrintJobType = "cup-label" | "customer-receipt";
-
-export type PrintJobStatus = "pending" | "printed" | "failed";
-
-export type PrintJob = {
-  id: string;
-  orderId: string;
-  type: PrintJobType;
-  status: PrintJobStatus;
-  attempts: number;
-  createdAt: string;
-  updatedAt: string;
-  printedAt?: string;
-  lastError?: string;
-  label?: {
-    productId: string;
-    name: string;
-    price: number;
-    itemIndex: number;
-    copyIndex: number;
-    copiesForItem: number;
-  };
-};
-
 export type PosState = {
   isOpen: boolean;
   openedAt: string | null;
@@ -196,7 +172,6 @@ export type LoginActivity = {
 export type StoreData = {
   pos: PosState;
   orders: Order[];
-  printJobs: PrintJob[];
   menu: MenuItem[];
   categories: string[];
   users: StaffUser[];

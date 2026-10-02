@@ -4,7 +4,6 @@ import type {
   LoginActivity,
   MenuItem,
   Order,
-  PrintJob,
   RecipeCosting,
   RecipeIngredient,
   Role,
@@ -84,7 +83,6 @@ function emptyStore(): StoreData {
   return {
     pos: { isOpen: false, openedAt: null, openedBy: null },
     orders: [],
-    printJobs: [],
     menu: DEFAULT_MENU.map((item) => ({ ...item })),
     categories: [...MENU_CATEGORIES],
     users: DEFAULT_USERS.map((item) => ({ ...item })),
@@ -143,17 +141,6 @@ function normalizeStore(store: StoreData): StoreData {
           category: item.category ?? categoryByProduct.get(item.productId),
         })),
       }));
-  }
-  if (!Array.isArray(store.printJobs)) {
-    store.printJobs = [];
-  } else {
-    store.printJobs = store.printJobs.filter(
-      (job) =>
-        job &&
-        typeof job.id === "string" &&
-        typeof job.orderId === "string" &&
-        (job.type === "cup-label" || job.type === "customer-receipt"),
-    );
   }
   // An empty menu/categories set is valid, intentional state once the
   // database has been initialized - normalizeStore must never fabricate
@@ -540,12 +527,11 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
     })),
   });
   if (previousStore) {
-    // These keys have no backing table - they only exist in this in-process
-    // copy - so carry them across a refresh instead of dropping them every
-    // TTL window: pending print jobs and admin-set login gates. (Menu
+    // This key has no backing table - it only exists in this in-process
+    // copy - so carry it across a refresh instead of dropping it every
+    // TTL window. (Menu
     // styles/addons are real menu_items columns now and re-read like any
     // other persisted field.)
-    store.printJobs = previousStore.printJobs;
     store.loginGates = previousStore.loginGates;
   }
   memoryStore = store;
@@ -554,7 +540,6 @@ async function readStore(options?: { fresh?: boolean }): Promise<StoreData> {
 }
 
 async function writeStore(store: StoreData): Promise<void> {
-  if (Array.isArray(store.printJobs) && store.printJobs.length > 300) store.printJobs = store.printJobs.slice(-300);
   const supabase = supabaseAdmin();
   const uniqueUsers = Array.from(
     new Map(
@@ -801,9 +786,6 @@ export async function deleteOrderRecord(id: string): Promise<void> {
     if (memoryStore) {
       memoryStore.orders = memoryStore.orders.filter((order) => order.id !== id);
       memoryStore.usageLogs = memoryStore.usageLogs.filter((entry) => entry.orderId !== id);
-      // printJobs has no backing table at all (never read from or written
-      // to Supabase); keep the existing in-memory-only cleanup for it.
-      memoryStore.printJobs = memoryStore.printJobs.filter((job) => job.orderId !== id);
     }
   });
 }
@@ -826,20 +808,11 @@ export async function deleteRestockRecord(id: string): Promise<void> {
 //
 // Cache strategy: order creation patches memoryStore with the exact values
 // that were just atomically committed (known with certainty, since the RPC
-// is all-or-nothing) rather than invalidating, specifically so printJobs -
-// which have no backing table and only ever live in memoryStore - survive
-// long enough for the immediately-following print flow to use them. Delete,
-// restock, and rename are lower-frequency admin operations whose exact
+// is all-or-nothing). Delete, restock, and rename are lower-frequency admin
+// operations whose exact
 // resulting state isn't already known on the TypeScript side without an extra
 // read, so those invalidate memoryStore instead of risking a hand-patched
 // value drifting from what the transaction actually committed.
-
-export async function appendPrintJobs(jobs: PrintJob[]): Promise<void> {
-  if (jobs.length === 0) return;
-  await enqueue(async () => {
-    if (memoryStore) memoryStore.printJobs.push(...jobs);
-  });
-}
 
 export async function createOrderAtomic(input: {
   order: Order;

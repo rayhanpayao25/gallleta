@@ -3,7 +3,7 @@ import { PosClient } from "@/components/PosClient";
 import { getSession } from "@/lib/auth";
 import { openBaristaShifts } from "@/lib/staff-sessions";
 import { getStore } from "@/lib/store";
-import type { Order, PrintJob } from "@/lib/types";
+import type { Order } from "@/lib/types";
 
 const POS_HISTORY_MS = 14 * 24 * 60 * 60 * 1000;
 
@@ -15,15 +15,6 @@ function withinPosWindow(iso: string | undefined) {
 
 function posOrders(orders: Order[]) {
   return orders.filter((order) => withinPosWindow(order.createdAt));
-}
-
-function posPrintJobs(jobs: PrintJob[], orderIds: Set<string>) {
-  return jobs.filter(
-    (job) =>
-      orderIds.has(job.orderId) ||
-      job.status === "pending" ||
-      job.status === "failed",
-  );
 }
 
 export const dynamic = "force-dynamic";
@@ -61,8 +52,6 @@ export default async function PosPage() {
   }
 
   const orders = posOrders(store.orders ?? []);
-  const orderIds = new Set(orders.map((order) => order.id));
-  const printJobs = posPrintJobs(store.printJobs ?? [], orderIds);
   return (
     <main className="h-svh overflow-hidden bg-neutral-100 text-black">
       <PosClient
@@ -72,7 +61,6 @@ export default async function PosPage() {
         categories={store.categories ?? []}
         orders={orders}
         clockedInBaristas={clockedInBaristas}
-        printJobs={printJobs}
         inventoryStore={{
           orders,
           inventory: store.inventory ?? [],
