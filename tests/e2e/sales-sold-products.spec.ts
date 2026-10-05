@@ -1,28 +1,41 @@
 import { test, expect } from "@playwright/test";
 import { loginAsAdmin } from "./utils";
 
-test("Admin Sales: Sold Products shows Drinks/Food/Pastries/Total Sold and totals match", async ({ page }) => {
+test("Admin Sales: Sold Products follows menu category types and totals match", async ({ page }) => {
   await loginAsAdmin(page);
 
   const card = page.locator("div", { has: page.getByText("Sold Products", { exact: true }) }).filter({ hasText: "Total Sold" }).last();
   await expect(card).toBeVisible();
 
-  for (const label of ["Drinks", "Food", "Pastries", "Total Sold"]) {
-    await expect(card.getByText(label, { exact: true })).toBeVisible();
+  const rows = card.locator("div.mt-3 > div");
+  const rowCount = await rows.count();
+  expect(rowCount).toBeGreaterThan(1);
+  await expect(rows.last()).toContainText("Total Sold");
+
+  let categoryQty = 0;
+  let categorySales = 0;
+  for (let index = 0; index < rowCount - 1; index += 1) {
+    const row = rows.nth(index);
+    const label = await row.locator("p").first().innerText();
+    expect(label).not.toBe("Total Sold");
+
+    const qtyText = await row.locator("p").last().innerText();
+    const qty = Number(qtyText.replace(/[^\d.-]/g, ""));
+    expect(Number.isFinite(qty), `expected a quantity for ${label}, got "${qtyText}"`).toBe(true);
+    categoryQty += qty;
+
+    const salesText = await row.locator("p").nth(1).innerText();
+    const sales = Number(salesText.replace(/[^\d.-]/g, ""));
+    expect(Number.isFinite(sales), `expected sales for ${label}, got "${salesText}"`).toBe(true);
+    categorySales += sales;
   }
 
-  async function valueFor(label: string): Promise<number> {
-    const row = card.locator("div", { has: page.getByText(label, { exact: true }) }).last();
-    const text = await row.locator("p").last().innerText();
-    const parsed = Number(text.replace(/[^\d.-]/g, ""));
-    expect(Number.isFinite(parsed), `expected a numeric value for ${label}, got "${text}"`).toBe(true);
-    return parsed;
-  }
+  const totalRow = rows.last();
+  const totalQtyText = await totalRow.locator("p").last().innerText();
+  const totalQty = Number(totalQtyText.replace(/[^\d.-]/g, ""));
+  const totalSalesText = await totalRow.locator("p").nth(1).innerText();
+  const totalSales = Number(totalSalesText.replace(/[^\d.-]/g, ""));
 
-  const drinks = await valueFor("Drinks");
-  const food = await valueFor("Food");
-  const pastries = await valueFor("Pastries");
-  const total = await valueFor("Total Sold");
-
-  expect(total).toBe(drinks + food + pastries);
+  expect(totalQty).toBe(categoryQty);
+  expect(totalSales).toBe(categorySales);
 });

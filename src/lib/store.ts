@@ -1035,6 +1035,7 @@ export async function setMenuCategoryTypeRecord(
       .eq("id", category.id);
     if (error) throw new Error(`Unable to save category type: ${error.message}`);
     if (memoryStore) memoryStore.categoryTypes[category.name] = type.trim();
+    invalidateStoreCache();
     return { ok: true };
   });
 }

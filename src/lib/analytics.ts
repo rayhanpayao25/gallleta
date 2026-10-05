@@ -147,16 +147,32 @@ export function drinkProductStats(stats: ProductStat[]): ProductStat[] {
   });
 }
 
+export function productStatsForCategoryType(
+  stats: ProductStat[],
+  categoryTypes: Record<string, string>,
+  targetType: string,
+): ProductStat[] {
+  const typeByCategory = new Map(
+    Object.entries(categoryTypes).map(([category, type]) => [
+      category.trim().toLowerCase(),
+      type.trim().toLowerCase(),
+    ]),
+  );
+  const normalizedTarget = targetType.trim().toLowerCase();
+  return stats.filter(
+    (item) => typeByCategory.get(item.category.trim().toLowerCase()) === normalizedTarget,
+  );
+}
+
 export function bestSellers(stats: ProductStat[], limit = 5): ProductStat[] {
-  const drinksOnly = drinkProductStats(stats);
-  return [...drinksOnly]
+  return [...stats]
     .sort((a, b) => b.qty - a.qty || b.sales - a.sales)
     .slice(0, limit);
 }
 
 // Ibinigay ulit ang topProducts export para mawala ang build error sa PosDrawer
 export function topProducts(orders: Order[], menu: { id: string; name: string; category: string }[] = [], limit = 5) {
-  return bestSellers(productStats(orders, menu), limit).map((item) => ({
+  return bestSellers(drinkProductStats(productStats(orders, menu)), limit).map((item) => ({
     name: item.name,
     qty: item.qty,
     sales: item.sales,
@@ -164,8 +180,7 @@ export function topProducts(orders: Order[], menu: { id: string; name: string; c
 }
 
 export function lowSellers(stats: ProductStat[], limit = 5): ProductStat[] {
-  const drinksOnly = drinkProductStats(stats);
-  return [...drinksOnly]
+  return [...stats]
     .sort((a, b) => a.qty - b.qty || a.sales - b.sales)
     .slice(0, limit);
 }
@@ -187,6 +202,41 @@ export function categorySales(stats: ProductStat[]) {
     map.set(item.category, current);
   }
   return [...map.values()].sort((a, b) => b.sales - a.sales);
+}
+
+export function soldProductTypeStats(
+  stats: ProductStat[],
+  categories: string[],
+  categoryTypes: Record<string, string>,
+): { name: string; qty: number; sales: number }[] {
+  const typeByCategory = new Map(
+    Object.entries(categoryTypes).map(([category, type]) => [
+      category.trim().toLowerCase(),
+      type.trim(),
+    ]),
+  );
+  const totals = new Map<string, { name: string; qty: number; sales: number }>();
+
+  function addCategory(category: string) {
+    const categoryName = category.trim() || "Other";
+    const name = typeByCategory.get(categoryName.toLowerCase()) || categoryName;
+    const key = name.toLowerCase();
+    const existing = totals.get(key);
+    if (existing) return existing;
+    const created = { name, qty: 0, sales: 0 };
+    totals.set(key, created);
+    return created;
+  }
+
+  for (const category of categories) addCategory(category);
+
+  for (const item of stats) {
+    const total = addCategory(item.category);
+    total.qty += item.qty;
+    total.sales += item.sales;
+  }
+
+  return [...totals.values()];
 }
 
 export function salesByHour(orders: Order[], now = new Date(), days = 7) {

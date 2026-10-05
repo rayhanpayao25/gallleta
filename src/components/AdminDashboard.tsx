@@ -14,7 +14,8 @@ import {
   ordersOnDay,
   paymentStats,
   productStats,
-  drinkProductStats,
+  productStatsForCategoryType,
+  soldProductTypeStats,
   salesByHour,
   salesByYearMonths,
   sumSales,
@@ -302,27 +303,30 @@ export function AdminDashboard({ store }: { store: StoreData }) {
   });
 
   const productStatsList = productStats(filteredOrdersList, store.menu);
-  const best = bestSellers(productStatsList, 5);
-  const low = lowSellers(productStatsList, 5);
-  const drinkStyles = new Map<string, { iced: number; hot: number }>();
+  const typedDrinkStats = productStatsForCategoryType(
+    productStatsList,
+    store.categoryTypes,
+    "Drinks",
+  );
+  const best = bestSellers(typedDrinkStats, 5);
+  const low = lowSellers(typedDrinkStats, 5);
+  const icedDrinks = new Map<string, number>();
   for (const order of filteredOrdersList) {
     for (const line of order.items) {
-      const current = drinkStyles.get(line.productId) ?? { iced: 0, hot: 0 };
-      if (line.style === "iced") current.iced += line.qty;
-      else if (line.style === "hot") current.hot += line.qty;
-      drinkStyles.set(line.productId, current);
+      if (line.style === "iced") {
+        icedDrinks.set(line.productId, (icedDrinks.get(line.productId) ?? 0) + line.qty);
+      }
     }
   }
-  const drinkSoldRows = drinkProductStats(productStatsList)
+  const drinkSoldRows = typedDrinkStats
     .filter((item) => item.qty > 0)
     .map((item) => ({
       ...item,
-      iced: drinkStyles.get(item.id)?.iced ?? 0,
-      hot: drinkStyles.get(item.id)?.hot ?? 0,
+      iced: icedDrinks.get(item.id) ?? 0,
     }))
     .sort((a, b) => b.qty - a.qty || a.name.localeCompare(b.name));
   
-  const categories = categorySales(drinkProductStats(productStatsList)).filter((item) => item.qty > 0);
+  const categories = categorySales(typedDrinkStats).filter((item) => item.qty > 0);
   
   const rawHours = salesByHour(filteredOrdersList, now, rangeType === "week" && activeFilterMode === "range" ? 7 : 1);
   const updatedHoursMap = rawHours.map(slot => {
@@ -360,21 +364,13 @@ export function AdminDashboard({ store }: { store: StoreData }) {
 
   const netProfitOrLoss = totalSalesAmount - (totalExpensesAmount + totalCreditsAmount);
 
-  const drinksQty = drinkProductStats(productStatsList).reduce((sum, item) => sum + item.qty, 0);
-  const drinksSales = drinkProductStats(productStatsList).reduce((sum, item) => sum + item.sales, 0);
-  const foodSales = productStatsList
-    .filter((item) => /food/i.test(item.category) && !/pastr/i.test(item.category))
-    .reduce((sum, item) => sum + item.sales, 0);
-  const pastriesSales = productStatsList
-    .filter((item) => /pastr/i.test(item.category))
-    .reduce((sum, item) => sum + item.sales, 0);
-  const foodQty = productStatsList
-    .filter((item) => /food/i.test(item.category) && !/pastr/i.test(item.category))
-    .reduce((sum, item) => sum + item.qty, 0);
-  const pastryQty = productStatsList
-    .filter((item) => /pastr/i.test(item.category))
-    .reduce((sum, item) => sum + item.qty, 0);
-  const totalSoldQty = drinksQty + foodQty + pastryQty;
+  const soldProductTypes = soldProductTypeStats(
+    productStatsList,
+    store.categories,
+    store.categoryTypes,
+  );
+  const totalSoldQty = soldProductTypes.reduce((sum, item) => sum + item.qty, 0);
+  const totalSoldSales = soldProductTypes.reduce((sum, item) => sum + item.sales, 0);
   const costByCategory = filteredOrdersList.reduce((totals, order) => {
     order.items.forEach((line) => {
       const menuItem = store.menu.find((item) => item.id === line.productId) ?? store.menu.find((item) => item.name.trim().toLowerCase() === line.name.trim().toLowerCase());
@@ -574,31 +570,19 @@ export function AdminDashboard({ store }: { store: StoreData }) {
               Sold Products
             </p>
             <div className="mt-3 space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium">Drinks</p>
-                  <p className="text-xs text-neutral-500">{formatMoney(drinksSales)}</p>
+              {soldProductTypes.map((item) => (
+                <div key={item.name} className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium">{item.name}</p>
+                    <p className="text-xs text-neutral-500">{formatMoney(item.sales)}</p>
+                  </div>
+                  <p className="text-2xl font-semibold sm:text-3xl">{item.qty}</p>
                 </div>
-                <p className="text-2xl font-semibold sm:text-3xl">{drinksQty}</p>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium">Food</p>
-                  <p className="text-xs text-neutral-500">{formatMoney(foodSales)}</p>
-                </div>
-                <p className="text-2xl font-semibold sm:text-3xl">{foodQty}</p>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium">Pastries</p>
-                  <p className="text-xs text-neutral-500">{formatMoney(pastriesSales)}</p>
-                </div>
-                <p className="text-2xl font-semibold sm:text-3xl">{pastryQty}</p>
-              </div>
+              ))}
               <div className="flex items-center justify-between gap-3 border-t border-neutral-200 pt-3">
                 <div>
                   <p className="text-sm font-semibold">Total Sold</p>
-                  <p className="text-xs text-neutral-500">{formatMoney(drinksSales + foodSales + pastriesSales)}</p>
+                  <p className="text-xs text-neutral-500">{formatMoney(totalSoldSales)}</p>
                 </div>
                 <p className="text-2xl font-semibold sm:text-3xl">{totalSoldQty}</p>
               </div>
@@ -932,10 +916,9 @@ export function AdminDashboard({ store }: { store: StoreData }) {
               </p>
             ) : (
               <div className="mt-4">
-                <div className="hidden grid-cols-5 gap-x-4 border-b border-neutral-200 pb-2 text-xs text-neutral-500 sm:grid">
+                <div className="hidden grid-cols-4 gap-x-4 border-b border-neutral-200 pb-2 text-xs text-neutral-500 sm:grid">
                   <p className="min-w-0">Drink</p>
                   <p className="min-w-0 text-right">Iced</p>
-                  <p className="min-w-0 text-right">Hot</p>
                   <p className="min-w-0 text-right">Sold</p>
                   <p className="min-w-0 text-right">Sales</p>
                 </div>
@@ -943,16 +926,12 @@ export function AdminDashboard({ store }: { store: StoreData }) {
                   {drinkSoldRows.map((item) => (
                     <div
                       key={item.id}
-                      className="grid grid-cols-1 gap-1 py-3 sm:grid-cols-5 sm:items-start sm:gap-x-4"
+                      className="grid grid-cols-1 gap-1 py-3 sm:grid-cols-4 sm:items-start sm:gap-x-4"
                     >
                       <p className="min-w-0 text-sm font-medium">{item.name}</p>
                       <p className="min-w-0 text-sm text-neutral-600 sm:text-right">
                         <span className="sm:hidden">Iced: </span>
                         {item.iced}
-                      </p>
-                      <p className="min-w-0 text-sm text-neutral-600 sm:text-right">
-                        <span className="sm:hidden">Hot: </span>
-                        {item.hot}
                       </p>
                       <p className="min-w-0 text-sm text-neutral-700 sm:text-right">{item.qty}</p>
                       <p className="min-w-0 text-sm font-semibold sm:text-right">
