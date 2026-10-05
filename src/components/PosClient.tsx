@@ -410,7 +410,7 @@ export function PosClient({
             }}
             className="text-base font-bold tracking-tight"
           >
-            Galleta Coffee
+            Galleta Café
           </button>
           {activePanel !== "pos" ? (
             <p className="truncate text-sm font-medium text-white/70">
@@ -446,7 +446,7 @@ export function PosClient({
               }}
               className="text-sm font-semibold tracking-tight"
             >
-              Galleta Coffee
+              Galleta Café
             </button>
             <button
               type="button"

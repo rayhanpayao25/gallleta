@@ -1,4 +1,4 @@
-"""Seed the printed Galleta Coffee menu into Supabase.
+"""Seed the printed Galleta Café menu into Supabase.
 
 By default this only previews the catalog. Pass --apply to upsert the printed
 categories and menu items. Add --replace to also remove other catalog entries.

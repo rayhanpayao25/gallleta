@@ -91,7 +91,7 @@ export function StaffHeader({ session, panel, onPanelChange }: StaffHeaderProps)
         }`}
       >
         <div className="flex items-center justify-between border-b border-neutral-200 px-5 py-4">
-          <p className="text-sm font-semibold tracking-tight">Galleta Coffee</p>
+          <p className="text-sm font-semibold tracking-tight">Galleta Café</p>
           <button
             type="button"
             aria-label="Close menu"

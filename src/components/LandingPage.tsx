@@ -56,7 +56,7 @@ export function LandingPage({
       <section className="relative min-h-svh overflow-hidden">
         <Image
           src="/images/hero-wide.jpg"
-          alt="Galleta Coffee cafe bar"
+          alt="Galleta Café cafe bar"
           fill
           loading="eager"
           quality={95}
@@ -83,7 +83,7 @@ export function LandingPage({
             </p>
           </div>
           <p className="mt-2 text-[10px] tracking-[0.22em] text-white/65 uppercase sm:text-[11px] sm:tracking-[0.38em]">
-           Mango Drive, Suterville · Zamboanga City
+            W2J4+H82, Sinunoc · Zamboanga City, Zamboanga del Sur
           </p>
         </div>
       </section>
@@ -110,7 +110,7 @@ export function LandingPage({
           </article>
           <Photo
             src="/images/drinks.jpg"
-            alt="Signature iced drinks at Galleta Coffee"
+            alt="Signature iced drinks at Galleta Café"
             className="min-h-[240px] sm:min-h-[360px] md:col-span-5 md:min-h-[640px]"
             sizes="(max-width: 768px) 100vw, 42vw"
           />
@@ -125,7 +125,7 @@ export function LandingPage({
         <div className="mx-auto grid max-w-6xl gap-3 sm:gap-4 md:grid-cols-2">
           <Photo
             src="/images/cups.jpg"
-            alt="Iced latte and matcha at Galleta Coffee"
+            alt="Iced latte and matcha at Galleta Café"
             className="min-h-[260px] sm:min-h-[440px] md:min-h-[520px]"
             sizes="(max-width: 768px) 100vw, 50vw"
           />
@@ -192,7 +192,7 @@ export function LandingPage({
     href="/drinks"
     className="inline-flex items-center justify-center rounded-full bg-white px-7 py-3.5 text-xs font-semibold uppercase tracking-[0.22em] text-black transition hover:bg-neutral-200"
   >
-    View Galleta Coffee Drinks
+    View Galleta Café Drinks
   </Link>
   <a
     href="https://taximaxim.onelink.me/KKXl?pid=refferalmztall&af_dp=maximzakaz%3A%2F%2F&af_web_dp=https%3A%2F%2Ftaximaxim.com%2Fapp&c=menumzt"
@@ -218,7 +218,7 @@ export function LandingPage({
         <div className="mx-auto grid max-w-6xl items-center gap-8 lg:grid-cols-2 lg:gap-12">
           <Photo
             src="/images/storefront.jpg"
-            alt="Galleta Coffee cafe storefront at night"
+            alt="Galleta Café cafe storefront at night"
             className="min-h-[280px] sm:min-h-[480px] lg:min-h-[620px]"
             sizes="(max-width: 1024px) 100vw, 50vw"
           />
@@ -237,7 +237,7 @@ export function LandingPage({
             </p>
             <p className="mt-8 text-base leading-7 text-neutral-300 sm:text-lg sm:leading-8">
               Every cup tells a story, and every sip brings us closer together. A
-              quiet industrial house in Suterville. Matcha umami, sea salt cream,
+              quiet industrial house in Sinunoc. Matcha umami, sea salt cream,
               panini, and a table meant to be shared.
             </p>
           </div>
@@ -298,14 +298,14 @@ export function LandingPage({
           </div>
           <Photo
             src="/images/open-now.jpg"
-            alt="We're open now at Galleta Coffee"
+            alt="We're open now at Galleta Café"
             loading="eager"
             className="min-h-[220px] sm:min-h-[360px] lg:col-span-4 lg:min-h-[560px]"
             sizes="(max-width: 1024px) 100vw, 33vw"
           />
           <Photo
             src="/images/collage.jpg"
-            alt="Galleta Coffee cafe moments"
+            alt="Galleta Café cafe moments"
             className="min-h-[220px] sm:min-h-[360px] lg:col-span-3 lg:min-h-[560px]"
             sizes="(max-width: 1024px) 100vw, 25vw"
           />
@@ -333,7 +333,7 @@ export function LandingPage({
         </div>
         <div className="relative h-[260px] overflow-hidden border-t border-white/10 sm:h-[380px] lg:h-[460px]">
           <iframe
-            title="Galleta Coffee on Google Maps"
+            title="Galleta Café on Google Maps"
             src={CAFE.mapsEmbed}
             loading="lazy"
             referrerPolicy="no-referrer-when-downgrade"
