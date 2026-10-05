@@ -1406,7 +1406,7 @@ export function PosClient({
                     </span>
                   </div>
                   <div className="mx-auto w-full max-w-[220px] bg-white px-5 py-6 font-mono text-[11px] leading-5 text-black shadow-lg">
-                    <h4 className="text-center font-bold">MAKE THESE DRINKS</h4>
+                    <h4 className="text-center font-bold">MAKE THESE ORDERS</h4>
                     <p className="my-3 border-t border-dashed border-neutral-400" />
                     <p className="text-center font-bold">
                       ORDER NO. {selectedPrintOrder.ticketNo || "---"}
@@ -1444,7 +1444,7 @@ export function PosClient({
                     </ul>
                     <p className="my-3 border-t border-dashed border-neutral-400" />
                     <p className="text-center font-bold">
-                      {selectedPrintOrderItemCount} DRINK
+                      {selectedPrintOrderItemCount} ORDER
                       {selectedPrintOrderItemCount === 1 ? "" : "S"} TO MAKE
                     </p>
                   </div>
