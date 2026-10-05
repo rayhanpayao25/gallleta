@@ -8,7 +8,7 @@ test.use({ viewport: { width: 390, height: 844 } });
 test("mobile /drinks: title on left, icon-only Back button on right, navigates to /#menu", async ({ page }) => {
   await page.goto("/drinks", { waitUntil: "domcontentloaded" });
 
-  const title = page.locator("h1", { hasText: "Coffee ZZ Drinks" });
+  const title = page.locator("h1", { hasText: "Galleta Coffee Drinks" });
   const backLink = page.locator('a[aria-label="Back to Home"]');
   await expect(title).toBeVisible();
   await expect(backLink).toBeVisible();

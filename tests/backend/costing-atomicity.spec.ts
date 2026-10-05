@@ -73,14 +73,20 @@ test("save_recipe_costing rollback: invalid save leaves the previous recipe cost
   }
 });
 
-test("rename_menu_category: rename in place does not create a duplicate row", async () => {
+test("renaming a menu category keeps its ID and does not create a duplicate row", async () => {
   const supabase = supabaseTestClient();
   const slug = e2eId("cat").toLowerCase();
 
   try {
     await supabase.from("menu_categories").insert({ id: slug, name: "E2E Category Original" });
-    const rename1 = await supabase.rpc("rename_menu_category", { p_from_slug: slug, p_to_slug: slug, p_to_name: "E2E Category Renamed" });
-    expect(rename1.data?.ok).toBe(true);
+    const rename1 = await supabase
+      .from("menu_categories")
+      .update({ name: "E2E Category Renamed" })
+      .eq("id", slug)
+      .select("id")
+      .single();
+    expect(rename1.error).toBeNull();
+    expect(rename1.data?.id).toBe(slug);
 
     const rows = await supabase.from("menu_categories").select("*").eq("id", slug);
     expect(rows.data, "same-slug rename updates in place, no duplicate row").toHaveLength(1);

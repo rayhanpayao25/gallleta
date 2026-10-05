@@ -48,7 +48,7 @@ export function LoginForm({ role }: { role: "admin" | "cashier" }) {
         disabled={pending}
         className="w-full rounded-full bg-white py-3 text-sm font-medium text-black transition hover:bg-neutral-200 disabled:opacity-60"
       >
-        {pending ? "Signing in…" : "Enter Coffee ZZ"}
+        {pending ? "Signing in…" : "Enter Galleta Coffee"}
       </button>
     </form>
   );

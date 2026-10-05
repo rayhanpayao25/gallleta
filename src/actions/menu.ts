@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/auth";
-import { addonIdFromName, DRINK_STYLES, isFoodOrPastry, menuItemId, normalizeMenuAddons, normalizeMenuSizes, normalizeMenuStyles, stripMenuImage } from "@/lib/menu";
+import { addonIdFromName, DRINK_STYLES, isFoodOrPastry, menuItemId, normalizeMenuAddons, normalizeMenuSizes, normalizeMenuStyles, normalizeMenuTypes, stripMenuImage } from "@/lib/menu";
 import type { DrinkStyle, MenuAddon, MenuItem } from "@/lib/types";
 import {
   deleteMenuCategoryRecord,
@@ -10,7 +10,8 @@ import {
   getFreshStore,
   getStore,
   insertMenuCategoryRecord,
-  renameMenuCategoryAtomic,
+  renameMenuCategoryRecord,
+  setMenuCategoryTypeRecord,
   setMenuItemAvailableRecord,
   upsertMenuItemRecord,
   uploadPublicMenuPhoto,
@@ -127,9 +128,20 @@ function addonsFromForm(formData: FormData): MenuAddon[] {
   });
 }
 
+function typesFromForm(formData: FormData): { types: string[] } | { error: string } {
+  const packed = formData.get("types");
+  if (typeof packed !== "string") return { types: [] };
+  try {
+    const parsed: unknown = JSON.parse(packed);
+    if (!Array.isArray(parsed)) return { error: "Enter valid type options." };
+    return { types: normalizeMenuTypes(parsed) };
+  } catch {
+    return { error: "Enter valid type options." };
+  }
+}
+
 function sizesFromForm(
   formData: FormData,
-  category: string,
 ): { sizes: NonNullable<MenuItem["sizes"]> } | { error: string } {
   let parsed: unknown;
   try {
@@ -138,17 +150,7 @@ function sizesFromForm(
     return { error: "Enter valid prices for each cup size." };
   }
   const sizes = normalizeMenuSizes(parsed);
-  const expected = category === "Frappe Series" ? ["22oz"] : ["16oz", "22oz"];
-  if (
-    sizes.length !== expected.length ||
-    expected.some((label, index) => sizes[index]?.label !== label)
-  ) {
-    return {
-      error: category === "Frappe Series"
-        ? "Frappe items need a 22oz price."
-        : "Enter both 16oz and 22oz prices.",
-    };
-  }
+  if (sizes.length === 0) return { error: "Enter a valid price for each size." };
   return { sizes };
 }
 
@@ -180,11 +182,21 @@ export async function renameMenuCategory(from: string, to: string) {
     return { error: "That category is already on the board." };
   }
 
-  // rename_menu_category_atomic updates the existing row in place (same
-  // slug) or inserts the new one, repoints menu_items.category_id, and
-  // deletes the old row - all in one transaction, so no duplicate/orphaned
-  // category row can be left behind the way the old insert-only path could.
-  const result = await renameMenuCategoryAtomic(prev, next);
+  // Rename the category in place while retaining its ID, so menu item
+  // references remain valid.
+  const result = await renameMenuCategoryRecord(prev, next);
+  if (!result.ok) return { error: result.error };
+
+  refresh();
+  return { ok: true };
+}
+
+export async function setMenuCategoryType(name: string, type: string) {
+  await requireAdmin();
+  const category = name.trim();
+  if (!category) return { error: "Category not found." };
+
+  const result = await setMenuCategoryTypeRecord(category, type);
   if (!result.ok) return { error: result.error };
 
   refresh();
@@ -217,7 +229,8 @@ export async function createMenuItem(formData: FormData) {
   await requireAdmin();
   const name = readText(formData, "name");
   const category = readText(formData, "category");
-  const sizeResult = sizesFromForm(formData, category);
+  const sizeResult = sizesFromForm(formData);
+  const typesResult = typesFromForm(formData);
   const available = readText(formData, "available") !== "false";
   const photo = photoFromForm(formData);
 
@@ -225,6 +238,7 @@ export async function createMenuItem(formData: FormData) {
     return { error: "Name and category are required." };
   }
   if ("error" in sizeResult) return sizeResult;
+  if ("error" in typesResult) return typesResult;
 
   const id = menuItemId(name);
   let image = "/images/logo.jpg";
@@ -243,6 +257,7 @@ export async function createMenuItem(formData: FormData) {
     available,
     styles: stylesFromForm(formData, category),
     addons: addonsFromForm(formData),
+    types: typesResult.types,
     sizes: sizeResult.sizes,
   });
   refresh();
@@ -254,7 +269,8 @@ export async function updateMenuItem(formData: FormData) {
   const id = readText(formData, "id");
   const name = readText(formData, "name");
   const category = readText(formData, "category");
-  const sizeResult = sizesFromForm(formData, category);
+  const sizeResult = sizesFromForm(formData);
+  const typesResult = typesFromForm(formData);
   const available = readText(formData, "available") !== "false";
   const photo = photoFromForm(formData);
 
@@ -263,6 +279,7 @@ export async function updateMenuItem(formData: FormData) {
     return { error: "Name and category are required." };
   }
   if ("error" in sizeResult) return sizeResult;
+  if ("error" in typesResult) return typesResult;
 
   let uploaded: string | undefined;
   if (photo) {
@@ -285,6 +302,7 @@ export async function updateMenuItem(formData: FormData) {
     available,
     styles: stylesFromForm(formData, category, existing),
     addons: addonsFromForm(formData),
+    types: typesResult.types,
     sizes: sizeResult.sizes,
     image: uploaded ?? (isSafeImage(existing.image) ? existing.image : "/images/logo.jpg"),
   });

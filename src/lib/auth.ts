@@ -2,6 +2,8 @@ import { cookies } from "next/headers";
 import type { Session } from "@/lib/types";
 
 export const SESSION_COOKIE = "coffeezz_session";
+export const POS_SESSION_COOKIE = "galleta_pos_session";
+export const POS_TERMINAL_USER_ID = "pos-terminal";
 
 export function encodeSession(session: Session): string {
   return btoa(JSON.stringify(session))
@@ -33,7 +35,11 @@ export function decodeSession(value: string | undefined): Session | null {
 
 export async function getSession(): Promise<Session | null> {
   const jar = await cookies();
-  return decodeSession(jar.get(SESSION_COOKIE)?.value);
+  const posSession = decodeSession(jar.get(POS_SESSION_COOKIE)?.value);
+  if (posSession) return posSession;
+
+  const session = decodeSession(jar.get(SESSION_COOKIE)?.value);
+  return session?.userId === POS_TERMINAL_USER_ID ? null : session;
 }
 
 export function homeForRole(role: Session["role"]): string {

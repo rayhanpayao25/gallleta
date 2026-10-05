@@ -14,7 +14,7 @@ export default async function DrinksPage() {
         <div className="mb-6 flex items-center justify-between gap-5">
           <div>
             <p className="font-script text-2xl text-neutral-400">have a seat, take a sip</p>
-            <h1 className="font-serif text-3xl italic sm:text-5xl mt-1">Coffee ZZ Drinks</h1>
+            <h1 className="font-serif text-3xl italic sm:text-5xl mt-1">Galleta Coffee Drinks</h1>
           </div>
           <Link
             href="/#menu"

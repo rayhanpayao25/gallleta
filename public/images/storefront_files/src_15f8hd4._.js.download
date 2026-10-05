@@ -405,7 +405,7 @@ __turbopack_context__.s([
     ()=>CAFE
 ]);
 const CAFE = {
-    name: "Coffee ZZ",
+    name: "Galleta Coffee",
     tagline: "WE GATHER, OVER COFFEE",
     hours: "9:00AM - 10:00PM",
     hoursNote: "DAILY",
@@ -421,7 +421,7 @@ const CAFE = {
         {
             id: "facebook",
             label: "Facebook",
-            href: "https://www.facebook.com/p/coffee-zz-cafe-61582118725483/"
+            href: "https://www.facebook.com/p/galleta-coffee-cafe-61582118725483/"
         },
         {
             id: "instagram",

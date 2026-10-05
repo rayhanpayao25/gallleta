@@ -21,7 +21,10 @@ export const dynamic = "force-dynamic";
 
 export default async function PosPage() {
   const session = await getSession();
-  if (!session || (session.role !== "cashier" && session.role !== "manager")) {
+  if (!session) {
+    redirect("/pos/auto-login");
+  }
+  if (session.role !== "cashier" && session.role !== "manager") {
     redirect("/");
   }
 

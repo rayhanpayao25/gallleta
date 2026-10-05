@@ -1,5 +1,5 @@
 export const CAFE = {
-  name: "COFFEE ZZ",
+  name: "GALLETA COFFEE",
   tagline: "ICED DRINKS AND MORE",
   hours: "1:00PM - 11:00PM",
   hoursNote: "DAILY",
@@ -16,7 +16,7 @@ export const CAFE = {
     {
       id: "facebook" as const,
       label: "Facebook",
-      href: "https://www.facebook.com/p/coffee-zz-cafe-61582118725483/",
+      href: "https://www.facebook.com/p/galleta-coffee-cafe-61582118725483/",
     },
     {
       id: "instagram" as const,

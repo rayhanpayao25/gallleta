@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/auth";
-import { normalizeMenuSizes, pricedOrderLine } from "@/lib/menu";
+import { normalizeMenuSizes, normalizeMenuTypes, pricedOrderLine } from "@/lib/menu";
 import { parsePayment } from "@/lib/payments";
 import { ingredientsForOrderLine, roundQty } from "@/lib/inventory";
 import { canUsePos } from "@/lib/users";
@@ -238,6 +238,10 @@ export async function createOrder(
     const sizes = normalizeMenuSizes(menuItem.sizes);
     if (sizes.length > 1 && !sizes.some((size) => size.label === line.size)) {
       return { ok: false as const, error: `Choose a cup size for ${menuItem.name}.` };
+    }
+    const types = normalizeMenuTypes(menuItem.types);
+    if (types.length > 1 && !types.includes(line.selectedType ?? "")) {
+      return { ok: false as const, error: `Choose a type for ${menuItem.name}.` };
     }
     priced.push(pricedOrderLine(menuItem, { ...line, qty }));
   }

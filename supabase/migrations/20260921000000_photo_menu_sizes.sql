@@ -1,5 +1,5 @@
--- Match the persisted menu to the Coffee ZZ printed menu and store per-size
--- prices so POS orders, recipes, and receipts all use the selected cup size.
+-- Match the persisted menu to the previous Galleta Coffee catalog and store
+-- per-size prices so POS orders, recipes, and receipts use the selected size.
 
 alter table public.menu_categories
   add column if not exists sort_order integer not null default 1000;

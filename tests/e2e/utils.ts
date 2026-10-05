@@ -53,7 +53,7 @@ export async function loginAsAdmin(page: Page) {
   await page.goto(ADMIN_URL, { waitUntil: "domcontentloaded" });
   await page.fill('input[name="username"]', ADMIN_USERNAME);
   await page.fill('input[name="password"]', ADMIN_PASSWORD);
-  await page.click('button:has-text("Enter Coffee ZZ")');
+  await page.click('button:has-text("Enter Galleta Coffee")');
   await page.waitForURL("**/admin", { timeout: 15000 });
   await page.waitForSelector("text=Sales analysis", { timeout: 15000 });
 }
@@ -62,7 +62,7 @@ export async function loginAsCashier(page: Page) {
   await page.goto(CASHIER_URL, { waitUntil: "domcontentloaded" });
   await page.fill('input[name="username"]', CASHIER_USERNAME);
   await page.fill('input[name="password"]', CASHIER_PASSWORD);
-  await page.click('button:has-text("Enter Coffee ZZ")');
+  await page.click('button:has-text("Enter Galleta Coffee")');
   await page.waitForURL("**/pos", { timeout: 15000 });
 }
 

@@ -14,6 +14,8 @@ export type MenuSize = {
   price: number;
 };
 
+export type MenuType = string;
+
 export type MenuAddon = {
   id: string;
   name: string;
@@ -44,6 +46,7 @@ export type MenuItem = {
   available: boolean;
   styles?: DrinkStyle[];
   addons?: MenuAddon[];
+  types?: MenuType[];
   sizes?: MenuSize[];
 };
 
@@ -54,6 +57,7 @@ export type OrderItem = {
   price: number;
   style?: DrinkStyle;
   size?: string;
+  selectedType?: MenuType;
   category?: string;
   addons?: OrderAddon[];
 };
@@ -174,6 +178,7 @@ export type StoreData = {
   orders: Order[];
   menu: MenuItem[];
   categories: string[];
+  categoryTypes: Record<string, string>;
   users: StaffUser[];
   inventory: InventoryItem[];
   recipes: Record<string, RecipeIngredient[]>;

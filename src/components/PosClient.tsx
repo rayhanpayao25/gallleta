@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { logout } from "@/actions/auth";
 import { punchBaristaShift } from "@/actions/users";
 import {
   createOrder,
@@ -23,10 +22,12 @@ import {
   normalizeMenuAddons,
   normalizeMenuSizes,
   normalizeMenuStyles,
+  normalizeMenuTypes,
   orderLineListLabel,
   orderLineOptionsLabel,
   resolveOrderAddons,
 } from "@/lib/menu";
+import { printOrderToMake } from "@/lib/escpos-bluetooth";
 import { phDateString, phDateTimeLabel } from "@/lib/datetime";
 import { PAYMENT_METHODS, parsePayment, paymentLabel } from "@/lib/payments";
 import type {
@@ -89,6 +90,13 @@ function readCheckout(userId: string, menu: MenuItem[]): SavedCheckout | null {
       const selectedSize = sizes.find((size) => size.label === item.size) ?? sizes[0];
       const style = item.style === "hot" || item.style === "iced" ? item.style : undefined;
       const addons = resolveOrderAddons(product, item.addons);
+      const types = normalizeMenuTypes(product.types);
+      const selectedType = types.includes(item.selectedType ?? "")
+        ? item.selectedType
+        : types.length === 1
+          ? types[0]
+          : undefined;
+      if (types.length > 1 && !selectedType) return [];
       return [
         {
           productId: product.id,
@@ -97,6 +105,7 @@ function readCheckout(userId: string, menu: MenuItem[]): SavedCheckout | null {
           price: selectedSize?.price ?? product.price,
           size: selectedSize?.label,
           style,
+          selectedType,
           addons,
         },
       ];
@@ -133,6 +142,9 @@ export function PosClient({
   const [tendered, setTendered] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
   const [message, setMessage] = useState<string | null>(null);
+  const [printing, setPrinting] = useState(false);
+  const [printOrderModalOpen, setPrintOrderModalOpen] = useState(false);
+  const [selectedPrintOrderId, setSelectedPrintOrderId] = useState("");
   const [baristaModalOpen, setBaristaModalOpen] = useState(false);
   const [baristaUsername, setBaristaUsername] = useState("");
   const [baristaPassword, setBaristaPassword] = useState("");
@@ -142,6 +154,7 @@ export function PosClient({
     item: MenuItem;
     style?: DrinkStyle;
     size?: string;
+    selectedType?: string;
     addons: Record<string, number>;
     qty?: number;
   } | null>(null);
@@ -265,6 +278,16 @@ export function PosClient({
       })
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [orders, managerSearch, managerTodayOnly]);
+  const completedPrintOrders = useMemo(
+    () =>
+      [...orders]
+        .filter((order) => order.recordType !== "Purchase" && order.items.length > 0)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    [orders],
+  );
+  const selectedPrintOrder = completedPrintOrders.find((order) => order.id === selectedPrintOrderId);
+  const selectedPrintOrderItemCount =
+    selectedPrintOrder?.items.reduce((sum, item) => sum + item.qty, 0) ?? 0;
   function selectedAddonsFor(item: MenuItem, selected: Record<string, number>): OrderAddon[] {
     return resolveOrderAddons(
       item,
@@ -284,11 +307,12 @@ export function PosClient({
     size?: string,
     style?: DrinkStyle,
     addons: OrderAddon[] = [],
+    selectedType?: string,
   ) {
     if (!pos.isOpen || isManager) {
       return;
     }
-    const nextLine = { productId: id, name, qty: 1, price, size, style, addons };
+    const nextLine = { productId: id, name, qty: 1, price, size, style, selectedType, addons };
     const nextKey = cartLineKey(nextLine);
     setCart((current) => {
       const existing = current.find((item) => cartLineKey(item) === nextKey);
@@ -302,15 +326,49 @@ export function PosClient({
     setMessage(null);
   }
 
+  async function handlePrintOrderToMake() {
+    if (!selectedPrintOrder || printing) return;
+    setPrinting(true);
+    setMessage(null);
+    try {
+      await printOrderToMake(
+        selectedPrintOrder.items.map((item) => ({
+          quantity: item.qty,
+          name: drinkDisplayName(item),
+          options: [
+            item.size,
+            item.style ? drinkStyleLabel(item.style) : undefined,
+            item.selectedType,
+            ...(item.addons ?? [])
+              .filter((addon) => addon.qty > 0)
+              .map((addon) => `${addon.name}${addon.qty > 1 ? ` x${addon.qty}` : ""}`),
+          ].filter((option): option is string => Boolean(option)),
+        })),
+        {
+          ticketNo: selectedPrintOrder.ticketNo,
+          dateLabel: phDateTimeLabel(selectedPrintOrder.createdAt),
+        },
+      );
+      setMessage(`Order #${selectedPrintOrder.ticketNo ?? ""} sent to the thermal printer.`);
+      setPrintOrderModalOpen(false);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPrinting(false);
+    }
+  }
+
  function handleMenuTap(item: MenuItem) {
     const styles = normalizeMenuStyles(item);
     const addons = normalizeMenuAddons(item);
+    const types = normalizeMenuTypes(item.types);
     const sizes = normalizeMenuSizes(item.sizes);
-    if (sizes.length > 1 || styles.length > 1 || addons.length > 0) {
+    if (sizes.length > 1 || styles.length > 1 || addons.length > 0 || types.length > 0) {
       setDrinkPick({
         item,
         style: styles.length === 1 ? styles[0] : undefined,
         size: sizes.length === 1 ? sizes[0].label : undefined,
+        selectedType: types.length === 1 ? types[0] : undefined,
         addons: {},
         qty: 1,
       });
@@ -352,7 +410,7 @@ export function PosClient({
             }}
             className="text-base font-bold tracking-tight"
           >
-            Coffee ZZ
+            Galleta Coffee
           </button>
           {activePanel !== "pos" ? (
             <p className="truncate text-sm font-medium text-white/70">
@@ -388,7 +446,7 @@ export function PosClient({
               }}
               className="text-sm font-semibold tracking-tight"
             >
-              Coffee ZZ
+              Galleta Coffee
             </button>
             <button
               type="button"
@@ -504,27 +562,12 @@ export function PosClient({
                 {isManager ? "manager" : "cashier"}
               </span>
             </p>
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => {
-                if (cart.length > 0) {
-                  setMessage("Finish checkout before logging out.");
-                  setMenuOpen(false);
-                  return;
-                }
-                startTransition(async () => await logout());
-              }}
-              className="w-full rounded-2xl px-4 py-3 text-left text-sm font-medium text-neutral-600 transition hover:bg-neutral-100 hover:text-black disabled:opacity-40"
-            >
-              {pending ? "Logging out..." : "Log out"}
-            </button>
           </div>
         </aside>
 
         {drinkPick ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-            <div className="relative w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="relative max-h-[90vh] w-full max-w-sm overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
               <button
                 type="button"
                 aria-label="Close drink options"
@@ -534,6 +577,27 @@ export function PosClient({
                 ×
               </button>
               <h2 className="text-xl font-semibold tracking-tight">{drinkPick.item.name}</h2>
+              {normalizeMenuTypes(drinkPick.item.types).length > 0 ? (
+                <>
+                  <p className="mt-4 text-sm text-neutral-500">Choose a type.</p>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    {normalizeMenuTypes(drinkPick.item.types).map((type) => (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => setDrinkPick({ ...drinkPick, selectedType: type })}
+                        className={`rounded-2xl border px-4 py-3 text-sm font-medium ${
+                          drinkPick.selectedType === type
+                            ? "border-black bg-black text-white"
+                            : "border-neutral-200 hover:border-black hover:bg-black hover:text-white"
+                        }`}
+                      >
+                        {type}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : null}
               {normalizeMenuSizes(drinkPick.item.sizes).length > 1 ? (
                 <>
                   <p className="mt-1 text-sm text-neutral-500">Choose a size.</p>
@@ -703,7 +767,8 @@ export function PosClient({
                 type="button"
                 disabled={
                   (normalizeMenuSizes(drinkPick.item.sizes).length > 1 && !drinkPick.size) ||
-                  (normalizeMenuStyles(drinkPick.item).length > 1 && !drinkPick.style)
+                  (normalizeMenuStyles(drinkPick.item).length > 1 && !drinkPick.style) ||
+                  (normalizeMenuTypes(drinkPick.item.types).length > 1 && !drinkPick.selectedType)
                 }
                 onClick={() => {
                   const q = drinkPick.qty ?? 1;
@@ -714,7 +779,8 @@ export function PosClient({
                       menuSizePrice(drinkPick.item, drinkPick.size),
                       drinkPick.size,
                       drinkPick.style,
-                      selectedAddonsFor(drinkPick.item, drinkPick.addons)
+                      selectedAddonsFor(drinkPick.item, drinkPick.addons),
+                      drinkPick.selectedType,
                     );
                   }
                   setDrinkPick(null);
@@ -1120,7 +1186,42 @@ export function PosClient({
                         </p>
                       ) : null}
                     </div>
-                    <span className="w-16 text-center text-xs">{item.qty}</span>
+                    <div className="flex w-16 items-center justify-center gap-1">
+                      <button
+                        type="button"
+                        aria-label={`Decrease ${drinkDisplayName(item)} quantity`}
+                        onClick={() =>
+                          setCart((current) =>
+                            current.flatMap((entry) => {
+                              if (cartLineKey(entry) !== cartLineKey(item)) return [entry];
+                              return entry.qty > 1
+                                ? [{ ...entry, qty: entry.qty - 1 }]
+                                : [];
+                            }),
+                          )
+                        }
+                        className="flex h-7 w-7 items-center justify-center rounded-full border border-neutral-300 text-base leading-none transition hover:border-black hover:bg-neutral-100"
+                      >
+                        −
+                      </button>
+                      <span className="min-w-4 text-center text-xs">{item.qty}</span>
+                      <button
+                        type="button"
+                        aria-label={`Increase ${drinkDisplayName(item)} quantity`}
+                        onClick={() =>
+                          setCart((current) =>
+                            current.map((entry) =>
+                              cartLineKey(entry) === cartLineKey(item)
+                                ? { ...entry, qty: entry.qty + 1 }
+                                : entry,
+                            ),
+                          )
+                        }
+                        className="flex h-7 w-7 items-center justify-center rounded-full border border-neutral-300 text-base leading-none transition hover:border-black hover:bg-neutral-100"
+                      >
+                        +
+                      </button>
+                    </div>
                     <span className="w-16 text-right text-xs">
                       {formatMoney(cartLineUnitPrice(item) * item.qty)}
                     </span>
@@ -1204,26 +1305,39 @@ export function PosClient({
                 <span>{formatMoney(isCash ? change : total)}</span>
               </div>
 
-              <button
-                type="button"
-                disabled={pending || !canCharge}
-                onClick={() =>
-                  startTransition(async () => {
-                    const result = await createOrder(cart, paymentMethod, paid);
-                    if (!result.ok) {
-                      setMessage(result.error);
-                      return;
-                    }
-                    setCart([]);
-                    setTendered("");
-                    setPaymentMethod("cash");
-                    setMessage(`Paid ${formatMoney(result.total ?? 0)}.`);
-                  })
-                }
-                className="relative w-full rounded-xl border-2 border-black py-2.5 text-xs font-medium transition active:scale-[0.99] disabled:opacity-40"
-              >
-                Proceed Order
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={printing}
+                  onClick={() => {
+                    setSelectedPrintOrderId(completedPrintOrders[0]?.id ?? "");
+                    setPrintOrderModalOpen(true);
+                  }}
+                  className="w-full rounded-xl border border-neutral-300 bg-white py-2.5 text-xs font-medium text-neutral-600 transition hover:border-black hover:text-black disabled:opacity-40"
+                >
+                  Print
+                </button>
+                <button
+                  type="button"
+                  disabled={pending || !canCharge}
+                  onClick={() =>
+                    startTransition(async () => {
+                      const result = await createOrder(cart, paymentMethod, paid);
+                      if (!result.ok) {
+                        setMessage(result.error);
+                        return;
+                      }
+                      setCart([]);
+                      setTendered("");
+                      setPaymentMethod("cash");
+                      setMessage(`Paid ${formatMoney(result.total ?? 0)}.`);
+                    })
+                  }
+                  className="relative w-full rounded-xl border-2 border-black py-2.5 text-xs font-medium transition active:scale-[0.99] disabled:opacity-40"
+                >
+                  Proceed Order
+                </button>
+              </div>
 
               {message ? (
                 <p className="text-center text-xs text-neutral-500">{message}</p>
@@ -1235,6 +1349,132 @@ export function PosClient({
         </div>
         )}
       </div>
+      {printOrderModalOpen ? (
+        <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-black/45 p-3 pt-8 sm:p-6 sm:pt-12">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="print-order-title"
+            className="w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl"
+          >
+            <header className="flex items-start justify-between gap-4 border-b border-neutral-200 px-5 py-4">
+              <div>
+                <h2 id="print-order-title" className="text-xl font-semibold text-neutral-900">
+                  Print order
+                </h2>
+                <p className="mt-1 text-sm text-neutral-500">
+                  Receipt and cup-label jobs are independent
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Close print order"
+                onClick={() => setPrintOrderModalOpen(false)}
+                className="rounded-full px-2 text-2xl leading-none text-neutral-500 hover:bg-neutral-100 hover:text-black"
+              >
+                ×
+              </button>
+            </header>
+            <div className="space-y-5 p-5">
+              <label className="block text-sm text-neutral-700">
+                <span className="mb-2 block">Completed order</span>
+                <select
+                  value={selectedPrintOrderId}
+                  onChange={(event) => setSelectedPrintOrderId(event.target.value)}
+                  disabled={completedPrintOrders.length === 0}
+                  className="w-full rounded-xl border border-neutral-300 bg-white px-4 py-3 text-base text-neutral-900 outline-none focus:border-black"
+                >
+                  {completedPrintOrders.length === 0 ? (
+                    <option value="">No completed orders</option>
+                  ) : null}
+                  {completedPrintOrders.map((order) => (
+                    <option key={order.id} value={order.id}>
+                      #{order.ticketNo || "—"} · {phDateTimeLabel(order.createdAt)} · {formatMoney(order.total)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {selectedPrintOrder ? (
+                <section className="rounded-3xl bg-neutral-100 p-4 sm:p-6">
+                  <div className="mb-5 flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="font-semibold text-neutral-900">Order to Make</h3>
+                      <p className="text-xs text-neutral-500">Thermal ticket preview</p>
+                    </div>
+                    <span className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-700">
+                      58 mm
+                    </span>
+                  </div>
+                  <div className="mx-auto w-full max-w-[220px] bg-white px-5 py-6 font-mono text-[11px] leading-5 text-black shadow-lg">
+                    <h4 className="text-center font-bold">MAKE THESE DRINKS</h4>
+                    <p className="my-3 border-t border-dashed border-neutral-400" />
+                    <p className="text-center font-bold">
+                      ORDER NO. {selectedPrintOrder.ticketNo || "---"}
+                    </p>
+                    <p className="text-center">{phDateTimeLabel(selectedPrintOrder.createdAt)}</p>
+                    <p className="my-3 border-t border-dashed border-neutral-400" />
+                    <div className="mb-2 grid grid-cols-[38px_1fr] font-bold text-neutral-500">
+                      <span>Qty</span>
+                      <span>Item</span>
+                    </div>
+                    <ul>
+                      {selectedPrintOrder.items.map((item, index) => {
+                        const options = [
+                          item.size,
+                          item.style ? drinkStyleLabel(item.style) : undefined,
+                          item.selectedType,
+                          ...(item.addons ?? [])
+                            .filter((addon) => addon.qty > 0)
+                            .map((addon) => `${addon.name}${addon.qty > 1 ? ` x${addon.qty}` : ""}`),
+                        ].filter((option): option is string => Boolean(option));
+                        return (
+                          <li key={`${item.productId}-${index}`} className="border-b border-dashed border-neutral-200 py-2">
+                            <div className="grid grid-cols-[38px_1fr] gap-1">
+                              <span className="font-bold">{item.qty}x</span>
+                              <span className="break-words font-medium uppercase">
+                                {drinkDisplayName(item)}
+                              </span>
+                            </div>
+                            {options.length > 0 ? (
+                              <p className="pl-[38px] text-neutral-600">{options.join(" · ")}</p>
+                            ) : null}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    <p className="my-3 border-t border-dashed border-neutral-400" />
+                    <p className="text-center font-bold">
+                      {selectedPrintOrderItemCount} DRINK
+                      {selectedPrintOrderItemCount === 1 ? "" : "S"} TO MAKE
+                    </p>
+                  </div>
+                </section>
+              ) : (
+                <p className="rounded-xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-500">
+                  No completed orders available to print.
+                </p>
+              )}
+            </div>
+            <footer className="flex justify-end gap-2 border-t border-neutral-200 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setPrintOrderModalOpen(false)}
+                className="rounded-xl border border-neutral-300 px-4 py-2.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!selectedPrintOrder || printing}
+                onClick={() => void handlePrintOrderToMake()}
+                className="rounded-xl bg-black px-4 py-2.5 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-40"
+              >
+                {printing ? "Printing..." : "Print Order to Make"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

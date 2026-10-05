@@ -40,14 +40,14 @@ export async function login(
   );
 
   if (!user || !user.password) {
-    return { error: "Those credentials do not match a Coffee ZZ staff account." };
+    return { error: "Those credentials do not match a Galleta Coffee staff account." };
   }
 
   const passwordMatches = user.password.startsWith("$2")
     ? await bcrypt.compare(password, user.password)
     : user.password === password;
   if (!passwordMatches) {
-    return { error: "Those credentials do not match a Coffee ZZ staff account." };
+    return { error: "Those credentials do not match a Galleta Coffee staff account." };
   }
 
   const titleRole = String(user.title ?? "").trim().toLowerCase();
@@ -115,4 +115,3 @@ export async function logout() {
 
   redirect("/");
 }
-

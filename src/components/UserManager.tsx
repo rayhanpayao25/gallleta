@@ -5,7 +5,7 @@ import {
   createStaffUser,
   deleteStaffUser,
   punchStaff,
-  updateLoginGates,
+  updateAdminLoginGate,
   updateStaffSessionTimes,
   deleteStaffSession,
   updateStaffUser,
@@ -44,7 +44,6 @@ export function UserManager({ users, session, loginActivity, loginGates }: UserM
   const [editLoginAt, setEditLoginAt] = useState("");
   const [editLogoutAt, setEditLogoutAt] = useState("");
   const [adminGate, setAdminGate] = useState(loginGates.admin);
-  const [cashierGate, setCashierGate] = useState(loginGates.cashier);
   
   // Global filter/display date state for In / Out
   const [selectedDate, setSelectedDate] = useState(phDateString());
@@ -532,14 +531,13 @@ export function UserManager({ users, session, loginActivity, loginGates }: UserM
               onSubmit={(event) => {
                 event.preventDefault();
                 startTransition(async () => {
-                  const result = await updateLoginGates(adminGate, cashierGate);
+                  const result = await updateAdminLoginGate(adminGate);
                   if (result && "error" in result && result.error) {
                     setNotice(typeof result.error === "string" ? result.error : "Could not save.");
                     return;
                   }
                   if (result && "ok" in result && result.ok) {
                     setAdminGate(result.admin);
-                    setCashierGate(result.cashier);
                   }
                   setNotice(null);
                 });
@@ -558,21 +556,6 @@ export function UserManager({ users, session, loginActivity, loginGates }: UserM
                 </div>
                 <span className="mt-1.5 block text-xs font-normal text-neutral-400">
                   Open: /{adminGate.trim() || "…"}
-                </span>
-              </label>
-              <label className="block text-xs font-medium text-neutral-600">
-                <span className="mb-1.5 block">Cashier path</span>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-neutral-400">/</span>
-                  <input
-                    value={cashierGate}
-                    onChange={(event) => setCashierGate(event.target.value)}
-                    className={field}
-                    required
-                  />
-                </div>
-                <span className="mt-1.5 block text-xs font-normal text-neutral-400">
-                  Open: /{cashierGate.trim() || "…"}
                 </span>
               </label>
               <button

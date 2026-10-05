@@ -7,7 +7,7 @@ test("admin login -> dashboard -> logout -> redirect to /mouna1233", async ({ pa
   await page.goto(ADMIN_URL, { waitUntil: "domcontentloaded" });
   await page.fill('input[name="username"]', ADMIN_USERNAME);
   await page.fill('input[name="password"]', ADMIN_PASSWORD);
-  await page.click('button:has-text("Enter Coffee ZZ")');
+  await page.click('button:has-text("Enter Galleta Coffee")');
 
   await page.waitForURL("**/admin", { timeout: 15000 });
   await expect(page.locator("text=Sales analysis")).toBeVisible({ timeout: 15000 });
@@ -19,20 +19,32 @@ test("admin login -> dashboard -> logout -> redirect to /mouna1233", async ({ pa
   expect(new URL(page.url()).pathname).toBe(ADMIN_URL);
 });
 
-// Protects the Cashier logout Jira fix specifically: cashier/POS logout
-// must redirect to its own gate path (/sale1803), not the admin gate or "/".
-test("cashier login -> POS -> logout -> redirect to /sale1803", async ({ page }) => {
+test("cashier login opens POS without showing a logout control", async ({ page }) => {
   await page.goto(CASHIER_URL, { waitUntil: "domcontentloaded" });
   await page.fill('input[name="username"]', CASHIER_USERNAME);
   await page.fill('input[name="password"]', CASHIER_PASSWORD);
-  await page.click('button:has-text("Enter Coffee ZZ")');
+  await page.click('button:has-text("Enter Galleta Coffee")');
 
   await page.waitForURL("**/pos", { timeout: 15000 });
   await expect(page.locator('[aria-label="Open menu"]')).toBeVisible({ timeout: 15000 });
-
   await page.click('[aria-label="Open menu"]');
-  await page.click('button:has-text("Log out")');
+  await expect(page.locator("button:has-text('Log out')")).toHaveCount(0);
+});
 
-  await page.waitForURL(`**${CASHIER_URL}`, { timeout: 15000 });
-  expect(new URL(page.url()).pathname).toBe(CASHIER_URL);
+test("POS and admin stay signed in independently in separate tabs", async ({ page }) => {
+  await page.goto("/pos", { waitUntil: "domcontentloaded" });
+  await expect(page.getByText("POS Terminal")).toBeVisible();
+
+  const adminPage = await page.context().newPage();
+  await adminPage.goto(ADMIN_URL, { waitUntil: "domcontentloaded" });
+  await adminPage.fill('input[name="username"]', ADMIN_USERNAME);
+  await adminPage.fill('input[name="password"]', ADMIN_PASSWORD);
+  await adminPage.click('button:has-text("Enter Galleta Coffee")');
+  await adminPage.waitForURL("**/admin", { timeout: 15000 });
+  await expect(adminPage.locator("text=Sales analysis")).toBeVisible({ timeout: 15000 });
+
+  await page.reload();
+  await expect(page.getByText("POS Terminal")).toBeVisible();
+  await adminPage.reload();
+  await expect(adminPage.locator("text=Sales analysis")).toBeVisible({ timeout: 15000 });
 });

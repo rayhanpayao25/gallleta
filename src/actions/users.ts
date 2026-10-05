@@ -407,28 +407,20 @@ export async function deleteStaffSession(input: { loginId?: string; logoutId?: s
   return { ok: true };
 }
 
-export async function updateLoginGates(
+export async function updateAdminLoginGate(
   adminPath: string,
-  cashierPath: string,
-): Promise<{ error: string } | { ok: true; admin: string; cashier: string }> {
+): Promise<{ error: string } | { ok: true; admin: string }> {
   await requireAdmin();
   const admin = sanitizeLoginGate(adminPath);
   if (!admin.ok) return { error: admin.error };
-  const cashier = sanitizeLoginGate(cashierPath);
-  if (!cashier.ok) return { error: cashier.error };
-  if (admin.value === cashier.value) {
-    return { error: "Use different paths for admin and cashier." };
-  }
 
-  let previous = { admin: "", cashier: "" };
+  let previousAdmin = "";
   await updateStore((store) => {
-    previous = { ...store.loginGates };
-    store.loginGates = { admin: admin.value, cashier: cashier.value };
+    previousAdmin = store.loginGates.admin;
+    store.loginGates = { ...store.loginGates, admin: admin.value };
   });
   refresh();
-  if (previous.admin) revalidatePath(`/${previous.admin}`);
-  if (previous.cashier) revalidatePath(`/${previous.cashier}`);
+  if (previousAdmin) revalidatePath(`/${previousAdmin}`);
   revalidatePath(`/${admin.value}`);
-  revalidatePath(`/${cashier.value}`);
-  return { ok: true, admin: admin.value, cashier: cashier.value };
+  return { ok: true, admin: admin.value };
 }
